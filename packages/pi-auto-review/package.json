@@ -1,6 +1,6 @@
 {
-  "name": "@erichll/pi-auto-review",
-  "version": "0.15.2",
+  "name": "@schuettc/pi-auto-review",
+  "version": "0.15.2-schuettc.2",
   "description": "Fail-closed, model-backed approval broker for Pi: deterministically hard-denies dangerous operations, reviews dangerous boundaries with a reviewer model, and issues one-shot expiring grants that OS sandbox adapters must consume before retrying.",
   "type": "module",
   "license": "MIT",
@@ -13,7 +13,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/erichll/pi-packages.git",
+    "url": "git+https://github.com/schuettc/pi-packages.git",
     "directory": "packages/pi-auto-review"
   },
   "homepage": "https://github.com/erichll/pi-packages/tree/main/packages/pi-auto-review",
