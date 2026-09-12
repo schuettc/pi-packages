@@ -86,9 +86,16 @@ type ReasoningLevel =
 
 type BoundedSurface = "external_directory" | "path";
 
+export type ReviewerProfile = Readonly<{
+  model: string;
+  reasoning: ReasoningLevel;
+}>;
+
 export type Config = {
   model: string;
   reasoning: ReasoningLevel;
+  reviewer?: string;
+  reviewers?: Readonly<Record<string, ReviewerProfile>>;
   timeoutMs: number;
   maxTokens: number;
   retries: number;
@@ -294,6 +301,7 @@ const FORMAT_RETRY_INSTRUCTION =
 const DEFAULT_CONFIG: Config = {
   model: "codex-auto-review",
   reasoning: "low",
+  reviewers: Object.freeze({}),
   timeoutMs: 90_000,
   maxTokens: 256,
   retries: 2,
@@ -363,6 +371,8 @@ function validateConfig(value: unknown, source: string): Config {
   const allowedKeys = new Set([
     "model",
     "reasoning",
+    "reviewer",
+    "reviewers",
     "timeoutMs",
     "maxTokens",
     "retries",
@@ -387,21 +397,57 @@ function validateConfig(value: unknown, source: string): Config {
     ...DEFAULT_CONFIG.policyAudit,
     ...(raw.policyAudit as Partial<PolicyAuditConfig> | undefined),
   };
-  if (
-    typeof config.model !== "string" ||
-    !config.model.trim() ||
-    /\s/.test(config.model) ||
-    config.model.split("/").some((segment) => !segment.trim())
-  ) {
+  const validModel = (model: unknown): model is string =>
+    typeof model === "string" &&
+    Boolean(model.trim()) &&
+    !/\s/.test(model) &&
+    model.split("/").every((segment) => Boolean(segment.trim()));
+  const validReasoning = (reasoning: unknown): reasoning is ReasoningLevel =>
+    ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+      String(reasoning),
+    );
+  if (!config.reviewers || typeof config.reviewers !== "object" ||
+      Array.isArray(config.reviewers)) {
+    throw new Error(`${EXTENSION_NAME}: reviewers must be an object`);
+  }
+  const reviewers = Object.create(null) as Record<string, ReviewerProfile>;
+  for (const [name, value] of Object.entries(config.reviewers)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+      throw new Error(`${EXTENSION_NAME}: invalid reviewer profile name ${name}`);
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${EXTENSION_NAME}: reviewer profile ${name} must be an object`);
+    }
+    const profile = value as unknown as Record<string, unknown>;
+    const extra = Object.keys(profile).filter(
+      (key) => key !== "model" && key !== "reasoning",
+    );
+    if (extra.length > 0 || !validModel(profile.model) ||
+        !validReasoning(profile.reasoning)) {
+      throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
+    }
+    reviewers[name] = Object.freeze({
+      model: profile.model,
+      reasoning: profile.reasoning,
+    });
+  }
+  config.reviewers = Object.freeze(reviewers);
+  if (config.reviewer !== undefined) {
+    if (
+      typeof config.reviewer !== "string" ||
+      !Object.hasOwn(reviewers, config.reviewer)
+    ) {
+      throw new Error(`${EXTENSION_NAME}: reviewer must name a configured profile`);
+    }
+    config.model = reviewers[config.reviewer].model;
+    config.reasoning = reviewers[config.reviewer].reasoning;
+  }
+  if (!validModel(config.model)) {
     throw new Error(
       `${EXTENSION_NAME}: model must be a model id or provider/model`,
     );
   }
-  if (
-    !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-      config.reasoning,
-    )
-  ) {
+  if (!validReasoning(config.reasoning)) {
     throw new Error(`${EXTENSION_NAME}: invalid reasoning level`);
   }
   if (
@@ -483,6 +529,7 @@ function validateConfig(value: unknown, source: string): Config {
   }
   return {
     ...config,
+    reviewers: config.reviewers,
     autoConfirmBoundedAllows: Object.freeze([
       ...config.autoConfirmBoundedAllows,
     ]),
@@ -521,6 +568,16 @@ export function loadConfig(): Config {
  * `~/.pi/agent/extensions/pi-auto-review/config.json`.
  * May set any legal config key, including model and autoConfirmBoundedAllows.
  */
+export function selectReviewerProfile(
+  config: Config,
+  reviewer: string,
+): Readonly<Config> {
+  return Object.freeze(validateConfig(
+    { ...config, reviewer },
+    `reviewer profile ${reviewer}`,
+  ));
+}
+
 export function applyUserConfig(
   packageConfig: Config,
   value: unknown,
@@ -2300,6 +2357,60 @@ export function createPiAutoReviewExtension(
         }
       },
     });
+
+  pi.registerCommand("auto-review-model", {
+    description: "Select a configured reviewer model for this session",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI || ctx.mode !== "tui") {
+        ctx.ui.notify(
+          "/auto-review-model requires interactive TUI mode.",
+          "warning",
+        );
+        return;
+      }
+      if (!context) {
+        ctx.ui.notify("pi-auto-review is not active.", "error");
+        return;
+      }
+      if (!ctx.isIdle()) {
+        ctx.ui.notify(
+          "/auto-review-model requires the agent to be idle.",
+          "warning",
+        );
+        return;
+      }
+      const reviewers = config.reviewers ?? {};
+      const names = Object.keys(reviewers);
+      if (names.length === 0) {
+        ctx.ui.notify(
+          "No reviewer profiles are configured in the trusted user config.",
+          "info",
+        );
+        return;
+      }
+      const choices = names.map((name) => {
+        const profile = reviewers[name];
+        const current = name === config.reviewer ? " (current)" : "";
+        return `${name} — ${profile.model}${current}`;
+      });
+      const selected = await ctx.ui.select(
+        `Select auto-review model (current: ${config.reviewer ?? config.model})`,
+        choices,
+      );
+      if (!selected) return;
+      const index = choices.indexOf(selected);
+      if (index < 0) {
+        ctx.ui.notify("The selected reviewer is no longer available.", "error");
+        return;
+      }
+      const reviewer = names[index];
+      config = selectReviewerProfile(config as Config, reviewer);
+      ctx.ui.notify(
+        `Using reviewer ${reviewer} (${config.model}) for the current session.`,
+        "info",
+      );
+    },
+  });
 
   pi.registerCommand("auto-review-approve", {
     description:
