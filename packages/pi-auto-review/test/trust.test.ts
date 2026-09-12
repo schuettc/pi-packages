@@ -45,6 +45,16 @@ test("project config can only tighten trusted settings and is frozen", () => {
   assert.throws(() =>
     applyProjectConfig(trusted, { model: "attacker/reviewer" }),
   );
+  assert.throws(() =>
+    applyProjectConfig(trusted, { reviewer: "attacker" }),
+  );
+  assert.throws(() =>
+    applyProjectConfig(trusted, {
+      reviewers: {
+        attacker: { model: "attacker/reviewer", reasoning: "off" },
+      },
+    }),
+  );
   assert.deepEqual(applyProjectConfig(trusted, { policyAudit: { retentionDays: 30 } }).policyAudit, {
     enabled: true,
     retentionDays: 30,
@@ -102,6 +112,64 @@ test("user config can fully overlay package trusted settings", () => {
   assert.equal(effective.failureMode, "defer");
   assert.deepEqual(effective.policyAudit, { enabled: true, retentionDays: 365 });
   assert.equal(effective.retries, packageConfig.retries);
+
+  const profiled = applyUserConfig(packageConfig, {
+    reviewer: "terra",
+    reviewers: {
+      sonnet: {
+        model: "claude-bridge/claude-sonnet-4-6",
+        reasoning: "off",
+      },
+      terra: {
+        model: "openai-codex/gpt-5.6-terra",
+        reasoning: "off",
+      },
+    },
+  });
+  assert.equal(profiled.reviewer, "terra");
+  assert.equal(profiled.model, "openai-codex/gpt-5.6-terra");
+  assert.equal(profiled.reasoning, "off");
+  assert.deepEqual(Object.keys(profiled.reviewers ?? {}), ["sonnet", "terra"]);
+  assert.equal(Object.isFrozen(profiled.reviewers), true);
+  assert.equal(Object.isFrozen(profiled.reviewers?.terra), true);
+
+  assert.throws(() =>
+    applyUserConfig(packageConfig, {
+      reviewer: "missing",
+      reviewers: {
+        terra: { model: "openai-codex/gpt-5.6-terra", reasoning: "off" },
+      },
+    }),
+  );
+  assert.throws(() =>
+    applyUserConfig(packageConfig, {
+      reviewers: {
+        terra: { model: "openai-codex/gpt-5.6-terra", reasoning: "invalid" },
+      },
+    }),
+  );
+  assert.throws(() =>
+    applyUserConfig(packageConfig, {
+      reviewers: {
+        "bad name": { model: "openai-codex/gpt-5.6-terra", reasoning: "off" },
+      },
+    }),
+  );
+  const prototypeNamed = applyUserConfig(
+    packageConfig,
+    JSON.parse(JSON.stringify({
+      reviewer: "toString",
+      reviewers: {
+        toString: {
+          model: "openai-codex/gpt-5.6-terra",
+          reasoning: "off",
+        },
+      },
+    })),
+  );
+  assert.equal(prototypeNamed.model, "openai-codex/gpt-5.6-terra");
+  assert.deepEqual(Object.keys(prototypeNamed.reviewers ?? {}), ["toString"]);
+  assert.equal(Object.getPrototypeOf(prototypeNamed.reviewers), null);
 
   const bareModel = applyUserConfig(packageConfig, {
     model: "codex-auto-review",

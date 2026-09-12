@@ -74,6 +74,7 @@ import {
   boundaryRequest,
   boundedRequest,
   resolveReviewerMeta,
+  selectReviewerProfile,
   sessionConfig,
   userReviewMetaFromResult,
   userConfigPath,
@@ -97,6 +98,7 @@ export {
   loadConfig,
   loadTrustedConfig,
   packageConfigPath,
+  selectReviewerProfile,
   userConfigPath,
   LOCAL_HARD_DENY_AGENT_INSTRUCTION,
   REVIEWER_CRITICAL_DENY_AGENT_INSTRUCTION,
@@ -405,6 +407,65 @@ export function createPiAutoReviewExtension(
         }
       },
     });
+
+  pi.registerCommand("auto-review-model", {
+    description: "Select a configured reviewer model for this session",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI || ctx.mode !== "tui") {
+        ctx.ui.notify(
+          "/auto-review-model requires interactive TUI mode.",
+          "warning",
+        );
+        return;
+      }
+      if (!context) {
+        ctx.ui.notify("pi-auto-review is not active.", "error");
+        return;
+      }
+      if (!ctx.isIdle()) {
+        ctx.ui.notify(
+          "/auto-review-model requires the agent to be idle.",
+          "warning",
+        );
+        return;
+      }
+      const reviewers = config.reviewers ?? {};
+      const names = Object.keys(reviewers);
+      if (names.length === 0) {
+        ctx.ui.notify(
+          "No reviewer profiles are configured in the trusted user config.",
+          "info",
+        );
+        return;
+      }
+      const profiles = Object.entries(reviewers);
+      const choices = profiles.map(([name, profile]) => {
+        const current = name === config.reviewer ? " (current)" : "";
+        return `${name} — ${profile.model}${current}`;
+      });
+      const selected = await ctx.ui.select(
+        `Select auto-review model (current: ${config.reviewer ?? config.model})`,
+        choices,
+      );
+      if (!selected) return;
+      const index = choices.indexOf(selected);
+      if (index < 0) {
+        ctx.ui.notify("The selected reviewer is no longer available.", "error");
+        return;
+      }
+      const selectedProfile = profiles[index];
+      if (!selectedProfile) {
+        ctx.ui.notify("The selected reviewer is no longer available.", "error");
+        return;
+      }
+      const [reviewer] = selectedProfile;
+      config = selectReviewerProfile(config as Config, reviewer);
+      ctx.ui.notify(
+        `Using reviewer ${reviewer} (${config.model}) for the current session.`,
+        "info",
+      );
+    },
+  });
 
   pi.registerCommand("auto-review-approve", {
     description:
