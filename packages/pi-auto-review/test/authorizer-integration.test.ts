@@ -118,6 +118,7 @@ function harness(
   const sentUserMessages: string[] = [];
   const uiDecisions: unknown[] = [];
   const modelCallOptions: Array<Record<string, unknown>> = [];
+  const modelLookups: Array<{ provider: string; modelId: string }> = [];
   const telemetry: Array<Record<string, unknown>> = [];
   const appendedEntries: Array<{ type: string; data: unknown }> = [];
   const widgets: Array<{ key: string; content: unknown; options: unknown }> = [];
@@ -274,8 +275,12 @@ function harness(
       },
     },
     modelRegistry: {
-      find: () =>
-        options.providerAvailable === false ? undefined : currentModel,
+      find: (provider: string, modelId: string) => {
+        modelLookups.push({ provider, modelId });
+        return options.providerAvailable === false
+          ? undefined
+          : { ...currentModel, provider, id: modelId, name: modelId };
+      },
       getAvailable: () => {
         reviewerMetaCalls++;
         return options.providerAvailable === false ? [] : [currentModel];
@@ -420,6 +425,7 @@ function harness(
     sentUserMessages,
     uiDecisions,
     modelCallOptions,
+    modelLookups,
     telemetry,
     appendedEntries,
     widgets,
@@ -2496,6 +2502,58 @@ test("real permission-system authorizer chain integration", async (t) => {
       } finally {
         read.dispose();
       }
+    }
+  });
+
+  await t.test("/auto-review-model selects a configured reviewer for the current session", async () => {
+    const instance = harness(allow, {
+      config: {
+        ...config(),
+        reviewer: "terra",
+        reviewers: {
+          sonnet: {
+            model: "claude-bridge/claude-sonnet-4-6",
+            reasoning: "high",
+          },
+          terra: {
+            model: "openai-codex/gpt-5.6-terra",
+            reasoning: "off",
+          },
+        },
+        model: "openai-codex/gpt-5.6-terra",
+        reasoning: "off",
+      },
+      interactiveTui: true,
+    });
+    const notices: string[] = [];
+    try {
+      const command = instance.commands.get("auto-review-model");
+      assert.ok(command);
+      await command.handler("", {
+        ...instance.context,
+        hasUI: true,
+        mode: "tui",
+        isIdle: () => true,
+        ui: {
+          async select(title: string, choices: string[]) {
+            assert.match(title, /terra/);
+            assert.equal(choices.length, 2);
+            return choices.find((choice) => choice.startsWith("sonnet "));
+          },
+          notify(message: string) {
+            notices.push(message);
+          },
+        },
+      });
+      await instance.authorize("network");
+      assert.deepEqual(instance.modelLookups.at(-1), {
+        provider: "claude-bridge",
+        modelId: "claude-sonnet-4-6",
+      });
+      assert.equal(instance.modelCallOptions.at(-1)?.reasoning, "high");
+      assert.match(notices.at(-1) ?? "", /sonnet.*current session/i);
+    } finally {
+      instance.dispose();
     }
   });
 
