@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.1-schuettc.1 - 2026-09-12
+
+- Add trusted named reviewer profiles and `/auto-review-model` for selecting a
+  configured model for the current interactive session.
+- Keep reviewer profile configuration outside project control: project settings
+  cannot define profiles or select the active reviewer.
+
 ## 0.18.1 - 2026-09-11
 
 - Animate the live `reviewing` label in the above-editor widget with a
