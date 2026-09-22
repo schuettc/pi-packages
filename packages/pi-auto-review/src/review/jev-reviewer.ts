@@ -1,5 +1,27 @@
-import type { BoundaryRequest } from "../broker/index.ts";
-import type { TranscriptResult, ModelDecision, RiskLevel } from "../policy.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { JevClient } from "pi-typesafe-ai";
+import type {
+  BoundaryRequest,
+  BoundaryReviewerContext,
+} from "../broker/index.ts";
+import {
+  buildClassifierTranscript,
+  type TranscriptResult,
+  type ModelDecision,
+  type RiskLevel,
+} from "../policy.ts";
+import {
+  applyReviewerInputBudget,
+  reviewPreflight,
+  sharedReviewContext,
+} from "./input.ts";
+import {
+  ReviewExecutionError,
+  type Config,
+  type ReviewExecutionSummary,
+  type ReviewPreflight,
+  type ReviewResult,
+} from "./types.ts";
 
 // The validated Jev question set (handoff thread #488), in the @typesafe-ai/sdk
 // question shape: one Choice, one ordered Score (criteria indexed from 0), and
@@ -176,4 +198,98 @@ export function jevVerdictToDecision(jev: JevVerdict): ModelDecision {
     user_authorization: "unknown", // Jev is instructed not to infer authorization
     rationale: parts.join("; ").slice(0, 600),
   };
+}
+
+// A Jev review has no per-attempt retry loop (the injected client owns its own
+// transport policy), so the execution summary carries an empty attempt list and
+// error counts; the transcript + preflight mirror what complete() reports so
+// downstream telemetry and failure handling are format-identical to the model
+// reviewer.
+function jevSummary(
+  transcript: TranscriptResult,
+  preflight: ReviewPreflight,
+  started: number,
+  now: () => number,
+): ReviewExecutionSummary {
+  return {
+    attempts: [],
+    errorCounts: {},
+    durationMs: now() - started,
+    transcript,
+    preflight,
+  };
+}
+
+export type JevReviewDeps = {
+  client: Pick<JevClient, "evaluate">;
+  now?: () => number;
+};
+
+// Run a Jev (System One) review. It builds the SAME budgeted evidence
+// transcript complete() builds for the model reviewer, hands it to the injected
+// Jev client, and maps the typed answers to a ModelDecision. It is fail-closed:
+// ANY error (client throw, malformed answers) is wrapped as a
+// ReviewExecutionError("jev_error", ...) so the caller applies failureMode
+// rather than ever returning an allow on a failure path.
+export async function reviewWithJev(
+  ctx: ExtensionContext,
+  config: Config,
+  request: BoundaryRequest,
+  reviewerContext: BoundaryReviewerContext | undefined,
+  profile: { model: string; timeoutMs?: number },
+  deps: JevReviewDeps,
+): Promise<ReviewResult> {
+  const now = deps.now ?? Date.now;
+  const started = now();
+  // Build `transcript` identically to complete() so Jev sees the exact same
+  // evidence Sonnet would (see review/complete.ts).
+  const selectedTranscript = buildClassifierTranscript(
+    ctx.sessionManager.buildContextEntries(),
+    config,
+    {
+      ...request,
+      trustedRetryOriginalRequestId:
+        reviewerContext?.userOverride?.originalRequestId,
+    },
+  );
+  const transcript = applyReviewerInputBudget(
+    request,
+    selectedTranscript,
+    reviewerContext,
+    config.maxReviewerInputTokens,
+  );
+  const sharedContext = sharedReviewContext(
+    request,
+    transcript,
+    reviewerContext,
+  );
+  const preflight = reviewPreflight(
+    request,
+    transcript,
+    reviewerContext,
+    sharedContext,
+    config.maxReviewerInputTokens,
+  );
+  try {
+    const state = buildJevState(request, transcript);
+    const { answers } = await deps.client.evaluate(state, JEV_QUESTIONS, {
+      model: profile.model,
+      timeoutMs: profile.timeoutMs,
+    });
+    const decision = jevVerdictToDecision(parseAnswers(answers));
+    return {
+      decision,
+      attempts: 1,
+      retryErrors: [],
+      durationMs: now() - started,
+      transcript,
+      summary: jevSummary(transcript, preflight, started, now),
+    };
+  } catch (error) {
+    void error;
+    throw new ReviewExecutionError(
+      "jev_error",
+      jevSummary(transcript, preflight, started, now),
+    );
+  }
 }

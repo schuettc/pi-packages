@@ -98,6 +98,7 @@ export type ReviewErrorClass =
   | "critical_evidence_overflow"
   | "required_profile_overflow"
   | "reviewer_input_budget_exceeded"
+  | "jev_error"
   | "unknown";
 
 export type ReviewAttemptObservation = {
