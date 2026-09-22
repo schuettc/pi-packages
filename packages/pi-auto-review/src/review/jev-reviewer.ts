@@ -157,6 +157,23 @@ export function policyOutcome(jev: JevVerdict): "allow" | "deny" | "defer" {
   return "allow";
 }
 
+function riskBand(score: number | undefined): RiskLevel {
+  const r = Math.round(score ?? 0);
+  return r >= 3 ? "critical" : r >= 2 ? "high" : r >= 1 ? "medium" : "low";
+}
+
 export function jevVerdictToDecision(jev: JevVerdict): ModelDecision {
-  throw new Error("Task 2");
+  const outcome = policyOutcome(jev);
+  const haz = Math.max(jev.haz?.credential ?? 0, jev.haz?.wipe ?? 0, jev.haz?.control ?? 0);
+  const parts = [
+    `Jev ${jev.outcome ?? "?"}${jev.choiceConfidence !== undefined ? ` (${jev.choiceConfidence.toFixed(2)})` : ""}`,
+    `risk ${jev.risk?.toFixed?.(2) ?? "?"}`,
+    haz > 0 ? `max-hazard ${haz.toFixed(2)}` : "",
+  ].filter(Boolean);
+  return {
+    outcome,
+    risk_level: riskBand(jev.risk),
+    user_authorization: "unknown", // Jev is instructed not to infer authorization
+    rationale: parts.join("; ").slice(0, 600),
+  };
 }

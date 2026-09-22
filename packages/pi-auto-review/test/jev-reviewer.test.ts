@@ -33,3 +33,17 @@ test("policyOutcome thresholds", () => {
   assert.equal(policyOutcome({ outcome: "allow", risk: 0, choiceConfidence: 0.4 }), "defer");
   assert.equal(policyOutcome({ outcome: "allow", risk: 0, choiceConfidence: 0.9 }), "allow");
 });
+
+import { jevVerdictToDecision } from "../src/review/jev-reviewer.ts";
+
+test("jevVerdictToDecision maps outcome, risk band, unknown auth, rationale", () => {
+  const d = jevVerdictToDecision({ outcome: "deny", risk: 3, choiceConfidence: 0.95, haz: { credential: 0.9, wipe: 0.01, control: 0.02 } });
+  assert.equal(d.outcome, "deny");
+  assert.equal(d.risk_level, "critical");
+  assert.equal(d.user_authorization, "unknown");
+  assert.ok(d.rationale.length > 0 && d.rationale.length <= 600);
+  // risk banding
+  assert.equal(jevVerdictToDecision({ risk: 0, outcome: "allow", choiceConfidence: 0.9 }).risk_level, "low");
+  assert.equal(jevVerdictToDecision({ risk: 1, outcome: "allow", choiceConfidence: 0.9 }).risk_level, "medium");
+  assert.equal(jevVerdictToDecision({ risk: 2, outcome: "allow" }).risk_level, "high");
+});
