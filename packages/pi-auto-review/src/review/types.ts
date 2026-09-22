@@ -19,6 +19,8 @@ export type BoundedSurface = "external_directory" | "path";
 export type ReviewerProfile = Readonly<{
   model: string;
   reasoning: ReasoningLevel;
+  engine?: "jev";
+  timeoutMs?: number;
 }>;
 
 export type Config = {
