@@ -303,15 +303,18 @@ export function createPiAutoReviewExtension(
     new BoundaryApprovalBroker({
       reviewer: async (request, reviewerContext) => {
         if (!context) throw new Error("review context is unavailable");
+        // Branch on the active reviewer profile's engine. A jev profile runs
+        // the System One engine; every other profile keeps the model
+        // complete() path. Both produce a ReviewResult that flows through the
+        // identical success and fail-closed lines below. Resolved outside the
+        // try so the telemetry `engine` tag is correct on the failure path too.
+        const activeProfile =
+          config.reviewer !== undefined
+            ? config.reviewers?.[config.reviewer]
+            : undefined;
+        const engine: "model" | "jev" =
+          activeProfile?.engine === "jev" ? "jev" : "model";
         try {
-          // Branch on the active reviewer profile's engine. A jev profile runs
-          // the System One engine; every other profile keeps the model
-          // complete() path. Both produce a ReviewResult that flows through the
-          // identical success and fail-closed lines below.
-          const activeProfile =
-            config.reviewer !== undefined
-              ? config.reviewers?.[config.reviewer]
-              : undefined;
           const result =
             activeProfile?.engine === "jev"
               ? await reviewWithJev(
@@ -339,6 +342,9 @@ export function createPiAutoReviewExtension(
               config,
               result.summary,
               result.decision.outcome,
+              undefined,
+              engine,
+              engine === "jev" ? result.jev : undefined,
             ),
           );
           telemetryCompleted.add(request.id);
@@ -372,6 +378,7 @@ export function createPiAutoReviewExtension(
               execution.summary,
               config.failureMode,
               config.failureMode,
+              engine,
             ),
           );
           telemetryCompleted.add(request.id);

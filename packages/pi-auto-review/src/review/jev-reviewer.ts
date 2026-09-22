@@ -301,7 +301,8 @@ export async function reviewWithJev(
       model: profile.model,
       timeoutMs: profile.timeoutMs,
     });
-    const decision = jevVerdictToDecision(parseAnswers(answers));
+    const verdict = parseAnswers(answers);
+    const decision = jevVerdictToDecision(verdict);
     return {
       decision,
       attempts: 1,
@@ -309,6 +310,11 @@ export async function reviewWithJev(
       durationMs: now() - started,
       transcript,
       summary: jevSummary(transcript, preflight, started, now),
+      jev: {
+        ...(verdict.risk !== undefined ? { risk: verdict.risk } : {}),
+        ...(verdict.haz ? { haz: { ...verdict.haz } } : {}),
+        ...(verdict.conf !== undefined ? { conf: verdict.conf } : {}),
+      },
     };
   } catch (error) {
     const execError = new ReviewExecutionError(

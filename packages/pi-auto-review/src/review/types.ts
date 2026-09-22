@@ -149,10 +149,16 @@ export type ReviewerTelemetryEvent =
       type: "review_complete";
       requestId: string;
       surface: string;
+      engine: "model" | "jev";
       model: string;
       reasoning: ReasoningLevel;
       outcome: "allow" | "deny" | "defer";
       failureMode?: "deny" | "defer";
+      jev?: {
+        risk?: number;
+        haz?: { credential?: number; wipe?: number; control?: number };
+        conf?: number;
+      };
       attempts: number;
       errorCounts: ReviewExecutionSummary["errorCounts"];
       durationMs: number;
@@ -195,6 +201,12 @@ export type ReviewerRuntime = {
 // complete().
 export type ReviewerMeta = Omit<ReviewerRuntime, "auth" | "sessionId">;
 
+export type ReviewJevSignal = {
+  risk?: number;
+  haz?: { credential?: number; wipe?: number; control?: number };
+  conf?: number;
+};
+
 export type ReviewResult = {
   decision: ModelDecision;
   attempts: number;
@@ -203,6 +215,9 @@ export type ReviewResult = {
   transcript: TranscriptResult;
   summary: ReviewExecutionSummary;
   unavailable?: boolean;
+  // Present only for the jev engine: the compact verdict signal so the
+  // review_complete telemetry can capture it for policy-audit sweeps.
+  jev?: ReviewJevSignal;
 };
 
 export class ReviewExecutionError extends Error {

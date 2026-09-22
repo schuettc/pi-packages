@@ -10,6 +10,7 @@ import type {
   ReviewAttemptObservation,
   ReviewErrorClass,
   ReviewExecutionSummary,
+  ReviewJevSignal,
   ReviewResult,
   ReviewerMeta,
   ReviewerRuntime,
@@ -340,16 +341,20 @@ export function completeTelemetry(
   summary: ReviewExecutionSummary,
   outcome: "allow" | "deny" | "defer",
   failureMode?: "deny" | "defer",
+  engine: "model" | "jev" = "model",
+  jev?: ReviewJevSignal,
 ): ReviewerTelemetryEvent {
   const aggregate = aggregateUsage(summary.attempts);
   return {
     type: "review_complete",
     requestId: request.id,
     surface: request.surface,
+    engine,
     model: summary.attempts.at(-1)?.model ?? config.model,
     reasoning: config.reasoning,
     outcome,
     ...(failureMode ? { failureMode } : {}),
+    ...(engine === "jev" && jev ? { jev } : {}),
     attempts: summary.attempts.length,
     errorCounts: { ...summary.errorCounts },
     durationMs: summary.durationMs,

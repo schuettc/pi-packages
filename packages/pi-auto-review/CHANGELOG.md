@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.1-schuettc.3 - 2026-09-22
+
+- Add an optional `jev` reviewer engine: a profile with `engine: "jev"` runs
+  the boundary check through the Jev (System One) classifier from
+  `pi-typesafe-ai` on the same budgeted evidence, maps a typed verdict to the
+  same allow/deny/defer decision, and fails closed. Ships off by default; the
+  deterministic hard-rule floor still runs first and cannot be overridden.
+- Tag `review_complete` telemetry with an `engine` field (`"model"` or
+  `"jev"`); a `jev` review also records the compact Jev signal (`jev.risk`,
+  `jev.haz`, `jev.conf`) for policy-audit sweeps. The model path's telemetry is
+  unchanged except for the new `engine: "model"` tag.
+- Document the `jev` reviewer profile, its `pi-typesafe-ai` + `/typesafe setup`
+  key requirement, its fail-closed behavior, and that `sonnet` stays the
+  default reviewer.
+
 ## 0.18.1-schuettc.1 - 2026-09-12
 
 - Add trusted named reviewer profiles and `/auto-review-model` for selecting a
