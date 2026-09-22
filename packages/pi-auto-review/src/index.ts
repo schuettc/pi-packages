@@ -63,6 +63,8 @@ export { parseHostPort };
 import {
   applyUserConfig,
   complete,
+  reviewWithJev,
+  resolveJevClient,
   completeTelemetry,
   currentTurnScope,
   denialLabel,
@@ -89,6 +91,12 @@ import {
   type ReviewerTelemetryEvent,
 } from "./review/index.ts";
 import { ReviewExecutionError } from "./review/index.ts";
+import type { JevClient } from "pi-typesafe-ai";
+
+export type ResolveJevClient = (profile: {
+  model: string;
+  timeoutMs?: number;
+}) => Pick<JevClient, "evaluate">;
 
 export {
   applyProjectConfig,
@@ -110,6 +118,10 @@ export {
 export type PiAutoReviewExtensionOptions = {
   config?: Config;
   allowUntrustedWorkspace?: boolean;
+  // Injection seam for the Jev engine: tests supply a fake client here so the
+  // reviewer:jev dispatch path can be exercised without real credentials or a
+  // network call. Defaults to the real resolveJevClient.
+  resolveJevClient?: ResolveJevClient;
 };
 
 const POLICY_AUDIT_ENTRY_TYPE = "pi-auto-review-policy-audit";
@@ -207,6 +219,7 @@ export function createPiAutoReviewExtension(
   const allowUntrustedWorkspace =
     options.allowUntrustedWorkspace === true ||
     process.env.PI_AUTO_REVIEW_ALLOW_UNTRUSTED_DEV === "1";
+  const resolveJevClientDep = options.resolveJevClient ?? resolveJevClient;
 
   return (pi: ExtensionAPI): void => {
   try {
@@ -291,14 +304,32 @@ export function createPiAutoReviewExtension(
       reviewer: async (request, reviewerContext) => {
         if (!context) throw new Error("review context is unavailable");
         try {
-          const result = await complete(
-            context,
-            config,
-            request,
-            reviewerContext,
-            resolveReviewerMeta,
-            emitTelemetry,
-          );
+          // Branch on the active reviewer profile's engine. A jev profile runs
+          // the System One engine; every other profile keeps the model
+          // complete() path. Both produce a ReviewResult that flows through the
+          // identical success and fail-closed lines below.
+          const activeProfile =
+            config.reviewer !== undefined
+              ? config.reviewers?.[config.reviewer]
+              : undefined;
+          const result =
+            activeProfile?.engine === "jev"
+              ? await reviewWithJev(
+                  context,
+                  config,
+                  request,
+                  reviewerContext,
+                  activeProfile,
+                  { client: resolveJevClientDep(activeProfile) },
+                )
+              : await complete(
+                  context,
+                  config,
+                  request,
+                  reviewerContext,
+                  resolveReviewerMeta,
+                  emitTelemetry,
+                );
           if (request.source === "permission-system") {
             reviewResults.set(request.id, result);
           }

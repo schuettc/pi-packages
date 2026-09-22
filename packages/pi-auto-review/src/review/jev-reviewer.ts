@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { JevClient } from "pi-typesafe-ai";
+import { CredentialStore, JevClient, resolveTypeSafeDir } from "pi-typesafe-ai";
 import type {
   BoundaryRequest,
   BoundaryReviewerContext,
@@ -225,6 +225,21 @@ export type JevReviewDeps = {
   client: Pick<JevClient, "evaluate">;
   now?: () => number;
 };
+
+// Construct a real Jev client from a reviewer profile. The credential store is
+// resolved from the same TypeSafe directory the /typesafe command writes to, so
+// a key configured there is picked up without a restart. This is the default
+// seam behind the reviewer callback; tests inject a fake client instead.
+export function resolveJevClient(profile: {
+  model: string;
+  timeoutMs?: number;
+}): JevClient {
+  return new JevClient({
+    credentials: new CredentialStore({ dir: resolveTypeSafeDir() }),
+    defaultModel: profile.model,
+    defaultTimeoutMs: profile.timeoutMs,
+  });
+}
 
 // Run a Jev (System One) review. It builds the SAME budgeted evidence
 // transcript complete() builds for the model reviewer, hands it to the injected

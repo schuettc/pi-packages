@@ -103,6 +103,10 @@ function harness(
         }
       | { ok: false; error: string }
     >;
+    resolveJevClient?: (profile: {
+      model: string;
+      timeoutMs?: number;
+    }) => { evaluate: (...args: unknown[]) => Promise<unknown> };
   } = {},
 ) {
   const harnessSessionId = options.sessionId ?? "integration-session";
@@ -302,6 +306,9 @@ function harness(
   createPiAutoReviewExtension({
     config: options.config ?? config(),
     allowUntrustedWorkspace: true,
+    ...(options.resolveJevClient
+      ? { resolveJevClient: options.resolveJevClient as never }
+      : {}),
   })(pi as never);
   handlers.get("session_start")?.({}, context);
   if (options.emitReady !== false) {
@@ -3025,6 +3032,79 @@ test("real permission-system authorizer chain integration", async (t) => {
       );
       assert.equal(firstOptions?.transport, "sse");
       assert.equal(secondOptions?.transport, "sse");
+    } finally {
+      instance.dispose();
+    }
+  });
+});
+
+// The reviewer:jev dispatch path: with a jev-engine profile active, the broker
+// must run the Jev engine (an injected fake client here) instead of the model
+// complete() path — so `streamSimple` is never called — and a jev client throw
+// must fail closed to the configured failureMode.
+test("reviewer:jev dispatches to the Jev engine instead of the model path", async (t) => {
+  const jevConfig = (overrides: Partial<Config> = {}): Config =>
+    config({
+      reviewer: "jev",
+      reviewers: {
+        jev: { model: "jev-latest", reasoning: "off", engine: "jev" },
+      } as Config["reviewers"],
+      ...overrides,
+    });
+
+  const allowAnswers = {
+    outcome: { choice: "allow", confidence: 0.9, probabilities: { allow: 0.9 } },
+    risk_level: { score: 0 },
+    hazard_credential_exfiltration: { noul: 0 },
+    hazard_destructive_wipe: { noul: 0 },
+    hazard_control_tampering: { noul: 0 },
+  };
+
+  await t.test("an injected allow verdict authorizes without touching the model", async () => {
+    let evaluateCalls = 0;
+    let seenProfileModel: string | undefined;
+    const instance = harness(deny, {
+      config: jevConfig(),
+      resolveJevClient: (profile) => {
+        seenProfileModel = profile.model;
+        return {
+          async evaluate() {
+            evaluateCalls++;
+            return { answers: allowAnswers, latencyMs: 1 };
+          },
+        };
+      },
+    });
+    try {
+      const result = await instance.authorize("network", {
+        requestId: "jev-allow",
+      });
+      assert.equal(result.decision.approved, true);
+      assert.equal(evaluateCalls, 1);
+      assert.equal(seenProfileModel, "jev-latest");
+      // The model path is never exercised on a jev review.
+      assert.equal(instance.modelContexts.length, 0);
+      assert.equal(instance.modelCallOptions.length, 0);
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  await t.test("a jev client throw fails closed to the configured failureMode", async () => {
+    const instance = harness(allow, {
+      config: jevConfig({ failureMode: "deny" }),
+      resolveJevClient: () => ({
+        async evaluate() {
+          throw new Error("jev transport unavailable");
+        },
+      }),
+    });
+    try {
+      const result = await instance.authorize("network", {
+        requestId: "jev-throw",
+      });
+      assert.equal(result.decision.approved, false);
+      assert.equal(instance.modelContexts.length, 0);
     } finally {
       instance.dispose();
     }
