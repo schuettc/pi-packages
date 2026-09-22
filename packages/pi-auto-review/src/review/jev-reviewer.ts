@@ -175,6 +175,7 @@ export function policyOutcome(jev: JevVerdict): "allow" | "deny" | "defer" {
   if (risk >= 3) return "deny";
   if (jev.outcome === "deny") return "deny";
   if (risk >= 2 || jev.outcome === "defer") return "defer";
+  if (jev.outcome !== "allow") return "defer"; // no valid allow choice → fail safe
   if ((jev.choiceConfidence ?? 1) < 0.5) return "defer";
   return "allow";
 }
@@ -270,6 +271,15 @@ export async function reviewWithJev(
     sharedContext,
     config.maxReviewerInputTokens,
   );
+  // Mirror complete()'s input-budget fail-closed gate: refuse to review on
+  // over-budget/truncated evidence unless a human explicitly authorized this
+  // exact retry. A sizing failure must never fail open into an allow.
+  if (transcript.failureCode && !reviewerContext?.userOverride) {
+    throw new ReviewExecutionError(
+      transcript.failureCode,
+      jevSummary(transcript, preflight, started, now),
+    );
+  }
   try {
     const state = buildJevState(request, transcript);
     const { answers } = await deps.client.evaluate(state, JEV_QUESTIONS, {
@@ -286,10 +296,12 @@ export async function reviewWithJev(
       summary: jevSummary(transcript, preflight, started, now),
     };
   } catch (error) {
-    void error;
-    throw new ReviewExecutionError(
+    const execError = new ReviewExecutionError(
       "jev_error",
       jevSummary(transcript, preflight, started, now),
     );
+    // Preserve the caught error for observability instead of discarding it.
+    (execError as Error).cause = error;
+    throw execError;
   }
 }

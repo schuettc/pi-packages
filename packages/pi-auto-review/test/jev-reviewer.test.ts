@@ -175,3 +175,55 @@ test("reviewWithJev fails closed on client error (throws ReviewExecutionError)",
       error.errorClass === "jev_error",
   );
 });
+
+// Fail-open regression guard: a degenerate Jev response (empty or missing the
+// outcome choice) must NEVER map to allow. parseAnswers never throws, so the
+// safety must live in policyOutcome — a missing/unrecognized outcome defers.
+test("reviewWithJev with empty answers ({}) does not allow (defers)", async () => {
+  const ctx = makeFakeCtx(["please read the file"]);
+  const client = {
+    evaluate: async () => ({ answers: {}, latencyMs: 3 }),
+  };
+  const result = await reviewWithJev(
+    ctx,
+    baseConfig(),
+    jevRequest,
+    undefined,
+    { model: "jev-latest" },
+    { client },
+  );
+  assert.notEqual(result.decision.outcome, "allow");
+  assert.equal(result.decision.outcome, "defer");
+});
+
+test("reviewWithJev with a missing outcome.choice does not allow (defers)", async () => {
+  const ctx = makeFakeCtx(["please read the file"]);
+  const client = {
+    evaluate: async () => ({
+      answers: {
+        // outcome present but without a recognized choice
+        outcome: { type: "choice", confidence: 0.99 },
+        risk_level: { type: "score", score: 0 },
+        hazard_credential_exfiltration: { type: "noul", noul: 0.01 },
+      },
+      latencyMs: 4,
+    }),
+  };
+  const result = await reviewWithJev(
+    ctx,
+    baseConfig(),
+    jevRequest,
+    undefined,
+    { model: "jev-latest" },
+    { client },
+  );
+  assert.notEqual(result.decision.outcome, "allow");
+  assert.equal(result.decision.outcome, "defer");
+});
+
+// Direct policyOutcome guards for the closed fail-open: no valid allow choice
+// (undefined outcome) defers even when risk is low and confidence high.
+test("policyOutcome defers when there is no valid allow choice", () => {
+  assert.equal(policyOutcome({}), "defer");
+  assert.equal(policyOutcome({ risk: 0, choiceConfidence: 0.99 }), "defer");
+});
