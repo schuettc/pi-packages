@@ -19,6 +19,8 @@ export type BoundedSurface = "external_directory" | "path";
 export type ReviewerProfile = Readonly<{
   model: string;
   reasoning: ReasoningLevel;
+  engine?: "jev";
+  timeoutMs?: number;
 }>;
 
 export type Config = {
@@ -98,6 +100,7 @@ export type ReviewErrorClass =
   | "critical_evidence_overflow"
   | "required_profile_overflow"
   | "reviewer_input_budget_exceeded"
+  | "jev_error"
   | "unknown";
 
 export type ReviewAttemptObservation = {
@@ -128,12 +131,37 @@ export type ReviewPreflight = {
   total: PreflightPart;
 };
 
+export type JevStage = "clientResolve" | "transcript" | "preflight" | "keyCheck" | "evaluate" | "map";
+
+/** One undici diagnostics_channel event, relative to the review start. */
+export type JevNetEvent = { t: number; event: string; detail?: string };
+
+export type JevDiagnostics = {
+  /** ISO timestamp when reviewWithJev began (correlate with the UI). */
+  at: string;
+  /** Milliseconds spent per stage (only stages that ran). */
+  stages: Partial<Record<JevStage, number>>;
+  /** Whether a key resolved (only when the client exposes isConfigured). */
+  keyConfigured?: boolean;
+  outcome: "ok" | "error";
+  errorClass?: ReviewErrorClass;
+  errorName?: string;
+  errorStatus?: number;
+  /** Sanitized: bearer tokens / ts_ keys redacted, single line, <= 300 chars. */
+  errorMessage?: string;
+  /** Network events seen during evaluate (method/path/status/error code only). */
+  net?: JevNetEvent[];
+  /** HTTP environment the SDK inherits (detects a replaced fetch/dispatcher). */
+  httpEnv?: { dispatcher: string; fetchNative: boolean; fetchName: string };
+};
+
 export type ReviewExecutionSummary = {
   attempts: ReviewAttemptObservation[];
   errorCounts: Partial<Record<Exclude<ReviewErrorClass, "none">, number>>;
   durationMs: number;
   transcript: TranscriptResult;
   preflight: ReviewPreflight;
+  jevDiagnostics?: JevDiagnostics;
 };
 
 export type ReviewerTelemetryEvent =
@@ -146,10 +174,17 @@ export type ReviewerTelemetryEvent =
       type: "review_complete";
       requestId: string;
       surface: string;
+      engine: "model" | "jev";
       model: string;
       reasoning: ReasoningLevel;
       outcome: "allow" | "deny" | "defer";
       failureMode?: "deny" | "defer";
+      jev?: {
+        risk?: number;
+        haz?: { credential?: number; wipe?: number; control?: number };
+        conf?: number;
+      };
+      jevDiagnostics?: JevDiagnostics;
       attempts: number;
       errorCounts: ReviewExecutionSummary["errorCounts"];
       durationMs: number;
@@ -192,6 +227,12 @@ export type ReviewerRuntime = {
 // complete().
 export type ReviewerMeta = Omit<ReviewerRuntime, "auth" | "sessionId">;
 
+export type ReviewJevSignal = {
+  risk?: number;
+  haz?: { credential?: number; wipe?: number; control?: number };
+  conf?: number;
+};
+
 export type ReviewResult = {
   decision: ModelDecision;
   attempts: number;
@@ -200,6 +241,9 @@ export type ReviewResult = {
   transcript: TranscriptResult;
   summary: ReviewExecutionSummary;
   unavailable?: boolean;
+  // Present only for the jev engine: the compact verdict signal so the
+  // review_complete telemetry can capture it for policy-audit sweeps.
+  jev?: ReviewJevSignal;
 };
 
 export class ReviewExecutionError extends Error {

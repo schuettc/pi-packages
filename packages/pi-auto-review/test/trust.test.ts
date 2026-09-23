@@ -11,6 +11,7 @@ import {
   loadTrustedConfig,
   userConfigPath,
 } from "../src/index.ts";
+import { DEFAULT_CONFIG, validateConfig } from "../src/review/config.ts";
 
 const TEST_TMP_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -266,6 +267,19 @@ test("userConfigPath resolves under the agent extensions directory", () => {
     userConfigPath("/home/demo"),
     "/home/demo/.pi/agent/extensions/pi-auto-review/config.json",
   );
+});
+
+test("a jev reviewer profile is accepted and selectable", () => {
+  const cfg = validateConfig({ ...DEFAULT_CONFIG, reviewers: { jev: { engine: "jev", model: "jev-latest" } }, reviewer: "jev" }, "test");
+  assert.equal((cfg.reviewers as any).jev.engine, "jev");
+  assert.equal((cfg.reviewers as any).jev.model, "jev-latest");
+});
+test("a model reviewer profile still validates as before", () => {
+  const cfg = validateConfig({ ...DEFAULT_CONFIG, reviewers: { sonnet: { model: "claude-bridge/claude-sonnet-4-6", reasoning: "off" } }, reviewer: "sonnet" }, "test");
+  assert.equal((cfg.reviewers as any).sonnet.model, "claude-bridge/claude-sonnet-4-6");
+});
+test("a jev profile cannot set reasoning-only nonsense; unknown keys still rejected", () => {
+  assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, reviewers: { jev: { engine: "jev", model: "jev-latest", bogus: 1 } } }, "test"), /invalid reviewer profile/);
 });
 
 test("security package loaded from the workspace is rejected", () => {
