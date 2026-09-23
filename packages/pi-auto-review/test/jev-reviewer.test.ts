@@ -67,6 +67,63 @@ test("policyOutcome thresholds", () => {
   assert.equal(policyOutcome({ outcome: "allow", risk: 0, choiceConfidence: 0.9 }), "allow");
 });
 
+test("policyOutcome: human authorization and approved retries", () => {
+  const high = { outcome: "defer" as const, risk: 1.9, choiceConfidence: 0.6, haz: { credential: 0.1, wipe: 0.05, control: 0.1 } };
+  // Unauthorized high risk still goes to a human.
+  assert.equal(policyOutcome({ ...high, auth: 0.2 }), "defer");
+  // Authorized high risk is allowed, including low-confidence allows.
+  assert.equal(policyOutcome({ ...high, auth: 0.85 }), "allow");
+  assert.equal(policyOutcome({ outcome: "allow", risk: 0.5, choiceConfidence: 0.3, auth: 0.9 }), "allow");
+  // A confident deny while authorized goes to a human, not an allow.
+  assert.equal(policyOutcome({ ...high, outcome: "deny", choiceConfidence: 0.8, auth: 0.95 }), "defer");
+  // Floors win over any authorization.
+  assert.equal(policyOutcome({ ...high, auth: 1, haz: { credential: 0.7 } }), "deny");
+  assert.equal(policyOutcome({ ...high, auth: 1, risk: 2.6 }), "deny");
+  // An approved exact retry is allowed unless a floor trips.
+  assert.equal(policyOutcome({ ...high, outcome: "deny", choiceConfidence: 0.9 }, { approvedRetry: true }), "allow");
+  assert.equal(policyOutcome({ ...high, haz: { control: 0.8 } }, { approvedRetry: true }), "deny");
+  assert.equal(policyOutcome({ ...high, risk: 2.7 }, { approvedRetry: true }), "deny");
+  // Missing authorization answer behaves exactly as before.
+  assert.equal(policyOutcome(high), "defer");
+});
+
+test("parseAnswers reads the user_authorization noul; decision reports it", () => {
+  const v = parseAnswers({ outcome: { choice: "defer", confidence: 0.6 }, risk_level: { score: 1.9 }, user_authorization: { noul: 0.88 } });
+  assert.equal(v.auth, 0.88);
+  const d = jevVerdictToDecision({ ...v, haz: {} });
+  assert.equal(d.outcome, "allow");
+  assert.equal(d.user_authorization, "high");
+  assert.match(d.rationale, /auth 0\.88/);
+  assert.equal(jevVerdictToDecision({ outcome: "allow", risk: 0, choiceConfidence: 0.9, auth: 0.1 }).user_authorization, "unknown");
+  assert.equal(jevVerdictToDecision({ outcome: "allow", risk: 0, choiceConfidence: 0.9, auth: 0.5 }).user_authorization, "medium");
+});
+
+test("JEV_QUESTIONS asks about human authorization and keystroke injection", () => {
+  const q = JEV_QUESTIONS as any;
+  assert.equal(q.user_authorization.type, "noul");
+  assert.match(q.user_authorization.instructions, /humanAuthorizations/);
+  assert.match(q.user_authorization.instructions, /never count/i);
+  assert.match(q.hazard_control_tampering.instructions, /tmux send-keys/);
+  assert.match(q.outcome.criteria.allow, /human authorized/);
+});
+
+test("buildJevState carries human authorizations outside untrusted evidence", () => {
+  const s = buildJevState(request, transcript, {
+    ledger: [{ at: "2026-09-23T06:00:00.000Z", text: "yes, merge it", inReplyTo: "Plan: merge #444" }],
+    standing: ["merging PRs to dev after green CI is routine"],
+    approvedRetry: { originalRequestId: "perm-1" },
+  }) as any;
+  assert.equal(s.humanAuthorizations.ledger[0].text, "yes, merge it");
+  assert.equal(s.humanAuthorizations.standing[0], "merging PRs to dev after green CI is routine");
+  assert.equal(s.humanAuthorizations.approvedRetry.originalRequestId, "perm-1");
+  assert.match(s.humanAuthorizations.note, /typed/);
+  assert.equal("humanAuthorizations" in s.evidence, false);
+  // Without any, the block is present but empty (Jev answers "not authorized").
+  const bare = buildJevState(request, transcript) as any;
+  assert.deepEqual(bare.humanAuthorizations.ledger, []);
+  assert.deepEqual(bare.humanAuthorizations.standing, []);
+});
+
 import { jevVerdictToDecision } from "../src/review/jev-reviewer.ts";
 
 test("jevVerdictToDecision maps outcome, risk band, unknown auth, rationale", () => {

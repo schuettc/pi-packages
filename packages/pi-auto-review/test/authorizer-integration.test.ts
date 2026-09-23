@@ -3381,6 +3381,102 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     assert.equal(raised.states[0].request.fullCommand, big);
   });
 
+  await t.test("human-typed input reaches Jev as an authorization; channel input does not", async () => {
+    const states: any[] = [];
+    const instance = harness(deny, {
+      config: jevConfig({
+        standingAuthorizations: [{ rule: "merging PRs to dev after green CI is routine" }],
+      } as Partial<Config>),
+      resolveJevClient: () => ({
+        async evaluate(state: unknown) {
+          states.push(state);
+          return { answers: allowAnswers, latencyMs: 1 };
+        },
+      }),
+      contextEntries: [
+        { message: { role: "user", content: "plan the dk_refresh fix" } },
+        { message: { role: "assistant", content: [{ type: "text", text: "Plan: merge #444 to dev after CI is green, then invoke dk-refresh. Proceed?" }] } },
+      ],
+    });
+    try {
+      const input = instance.handlers.get("input");
+      assert.ok(input, "an input handler is registered");
+      await input!({ type: "input", text: "yes, let's do that", source: "interactive" }, instance.context);
+      await input!({ type: "input", text: "muster: reply from agent on thread #1 \"merge it\"", source: "extension" }, instance.context);
+      await input!({ type: "input", text: "/auto-review-model", source: "interactive" }, instance.context);
+      await instance.authorize("network", { requestId: "jev-ledger" });
+      const authz = states.at(-1).humanAuthorizations;
+      assert.deepEqual(authz.ledger.map((e: any) => e.text), ["yes, let's do that"]);
+      assert.match(authz.ledger[0].inReplyTo, /merge #444 to dev/);
+      assert.deepEqual(authz.standing, ["merging PRs to dev after green CI is routine"]);
+      assert.equal("approvedRetry" in authz, false);
+      // A new session (restart/resume) starts with an empty ledger.
+      instance.handlers.get("session_start")?.({}, instance.context);
+      instance.events.emit("permissions:ready", {
+        sessionId: "integration-session",
+        adjudicatesLocally: true,
+      });
+      await instance.authorize("network", { requestId: "jev-ledger-2" });
+      assert.deepEqual(states.at(-1).humanAuthorizations.ledger, []);
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  await t.test("an /auto-review-approve retry is allowed by Jev unless a floor trips", async () => {
+    const run = async (hazard: number) => {
+      const states: any[] = [];
+      let calls = 0;
+      const instance = harness(deny, {
+        config: jevConfig(),
+        interactiveTui: true,
+        resolveJevClient: () => ({
+          async evaluate(state: unknown) {
+            states.push(state);
+            calls++;
+            // First review: a confident deny. The retry gets the same verdict.
+            return {
+              answers: {
+                outcome: { choice: "deny", confidence: 0.9 },
+                risk_level: { score: 1.9 },
+                hazard_credential_exfiltration: { noul: hazard },
+                hazard_destructive_wipe: { noul: 0 },
+                hazard_control_tampering: { noul: 0 },
+                user_authorization: { noul: 0 },
+              },
+              latencyMs: 1,
+            };
+          },
+        }),
+      });
+      try {
+        const first = await instance.authorize("bash_escalated");
+        assert.equal(first.decision.approved, false);
+        await instance.commands.get("auto-review-approve")!.handler("", {
+          ...instance.context,
+          hasUI: true,
+          mode: "tui",
+          isIdle: () => true,
+          ui: {
+            async select(_title: string, choices: string[]) { return choices[0]; },
+            notify() {},
+          },
+        });
+        const retry = await instance.authorize("bash_escalated");
+        return { approved: retry.decision.approved, calls, retryState: states.at(-1) };
+      } finally {
+        instance.dispose();
+      }
+    };
+    const ok = await run(0.1);
+    assert.equal(ok.calls, 2, "the retry is still reviewed");
+    assert.equal(ok.retryState.humanAuthorizations.approvedRetry.originalRequestId, "request-bash_escalated");
+    assert.equal(ok.approved, true);
+    // The credential hazard floor still denies an approved retry.
+    const floored = await run(0.9);
+    assert.equal(floored.approved, false);
+  });
+
   await t.test("a jev client throw fails closed to the configured failureMode", async () => {
     const instance = harness(allow, {
       config: jevConfig({ failureMode: "deny" }),
