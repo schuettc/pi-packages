@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BOUNDED_SURFACES,
@@ -12,6 +12,7 @@ import type {
   Config,
   ReasoningLevel,
   ReviewerProfile,
+  StandingAuthorization,
 } from "./types.ts";
 import type { PolicyAuditConfig } from "../policy-audit/index.ts";
 
@@ -56,6 +57,7 @@ export function validateConfig(value: unknown, source: string): Config {
     "grantTtlMs",
     "autoConfirmBoundedAllows",
     "policyAudit",
+    "standingAuthorizations",
   ]);
   const unknownKeys = Object.keys(raw).filter((key) => !allowedKeys.has(key));
   if (unknownKeys.length > 0) {
@@ -64,6 +66,12 @@ export function validateConfig(value: unknown, source: string): Config {
     );
   }
   const config = { ...DEFAULT_CONFIG, ...raw };
+  if (config.standingAuthorizations !== undefined) {
+    config.standingAuthorizations = validStandingAuthorizations(
+      config.standingAuthorizations,
+      source,
+    );
+  }
   config.policyAudit = {
     ...DEFAULT_CONFIG.policyAudit,
     ...(raw.policyAudit as Partial<PolicyAuditConfig> | undefined),
@@ -298,6 +306,48 @@ export function activeReviewConfig(config: Readonly<Config>): Readonly<Config> {
       maxReviewerInputTokens: profile.maxReviewerInputTokens,
     })
     : config;
+}
+
+function validStandingAuthorizations(
+  value: unknown,
+  source: string,
+): readonly Readonly<StandingAuthorization>[] {
+  const invalid = () =>
+    new Error(`${EXTENSION_NAME}: ${source} standingAuthorizations must be [{ rule, scope? }]`);
+  if (!Array.isArray(value)) throw invalid();
+  return Object.freeze(value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw invalid();
+    const entry = item as Record<string, unknown>;
+    if (Object.keys(entry).some((key) => key !== "rule" && key !== "scope")) throw invalid();
+    if (typeof entry.rule !== "string" || !entry.rule.trim() || entry.rule.length > 1_000) {
+      throw invalid();
+    }
+    if (entry.scope !== undefined && (typeof entry.scope !== "string" || !entry.scope.trim())) {
+      throw invalid();
+    }
+    return Object.freeze({
+      rule: entry.rule.trim(),
+      ...(entry.scope !== undefined ? { scope: entry.scope.trim() } : {}),
+    });
+  }));
+}
+
+// The standing authorization rules that apply to a request made from cwd.
+export function standingAuthorizationsFor(
+  config: Readonly<Config>,
+  cwd: string,
+): string[] {
+  const expand = (path: string) =>
+    path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+  const target = resolve(cwd);
+  return (config.standingAuthorizations ?? [])
+    .filter((entry) => {
+      if (entry.scope === undefined) return true;
+      const scope = resolve(expand(entry.scope));
+      const rel = relative(scope, target);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    })
+    .map((entry) => entry.rule);
 }
 
 export function selectReviewerProfile(
