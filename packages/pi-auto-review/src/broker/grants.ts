@@ -22,6 +22,7 @@ export function boundaryRequestHash(request: BoundaryRequest): string {
     operation: request.operation,
     cwd: request.cwd,
     command: request.command,
+    fullCommand: request.fullCommand,
     path: request.path,
     resolvedPath: request.resolvedPath,
     destination: request.destination,

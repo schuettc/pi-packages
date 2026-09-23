@@ -95,11 +95,23 @@ export function validateConfig(value: unknown, source: string): Config {
         key !== "model" &&
         key !== "reasoning" &&
         key !== "engine" &&
-        key !== "timeoutMs",
+        key !== "timeoutMs" &&
+        key !== "maxReviewerInputTokens",
     );
     if (extra.length > 0) {
       throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
     }
+    if (
+      profile.maxReviewerInputTokens !== undefined &&
+      (!Number.isInteger(profile.maxReviewerInputTokens) ||
+        (profile.maxReviewerInputTokens as number) < 2_048 ||
+        (profile.maxReviewerInputTokens as number) > 32_768)
+    ) {
+      throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
+    }
+    const budget = profile.maxReviewerInputTokens !== undefined
+      ? { maxReviewerInputTokens: profile.maxReviewerInputTokens as number }
+      : {};
     if (profile.engine === "jev") {
       if (typeof profile.model !== "string" || !profile.model.trim()) {
         throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
@@ -121,6 +133,7 @@ export function validateConfig(value: unknown, source: string): Config {
         ...(profile.timeoutMs !== undefined
           ? { timeoutMs: profile.timeoutMs as number }
           : {}),
+        ...budget,
       });
     } else {
       if (
@@ -134,6 +147,7 @@ export function validateConfig(value: unknown, source: string): Config {
       reviewers[name] = Object.freeze({
         model: profile.model,
         reasoning: profile.reasoning,
+        ...budget,
       });
     }
   }
@@ -269,6 +283,18 @@ function readJsonConfig(path: string): unknown {
 export function loadConfig(): Config {
   const path = packageConfigPath();
   return validateConfig(readJsonConfig(path), path);
+}
+
+// The config a review runs with: the base config, with the active reviewer
+// profile's input budget when it sets one. Applied per review rather than at
+// selection time so switching profiles never loses the base budget.
+export function activeReviewConfig(config: Readonly<Config>): Readonly<Config> {
+  const profile = config.reviewer !== undefined
+    ? config.reviewers?.[config.reviewer]
+    : undefined;
+  return profile?.maxReviewerInputTokens !== undefined
+    ? { ...config, maxReviewerInputTokens: profile.maxReviewerInputTokens }
+    : config;
 }
 
 export function selectReviewerProfile(

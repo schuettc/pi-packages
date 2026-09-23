@@ -175,6 +175,11 @@ reviewer, selected at startup with `reviewer` or in-session with
   forced wipes of `/`, `~`, `$HOME`, protected-write denials, and the rest of
   the deterministic layer) run before any engine and cannot be overridden by a
   Jev allow, exactly as with the model reviewer.
+- **Per-profile input budget.** Any profile may set `maxReviewerInputTokens`
+  (2,048–32,768) to override the base budget for the reviews it runs. Jev charges
+  only for input, at a low rate, and stays sub-second up to its ~32k-token state
+  limit, so a Jev profile can afford `32768` and review large commands whole
+  instead of failing closed on them.
 
 For a complete `@gotgenes/pi-permission-system` config that wires
 `pi-auto-review` into the authorizer chain — a copyable baseline covering
@@ -376,10 +381,27 @@ not represented by the request remain available as evidence. This compact
 reviewer representation does not affect request hashes, grants, overrides, or
 audit evidence.
 
+For bash, `@gotgenes/pi-permission-system` gates each unit of a command: for a
+heredoc such as `python3 - <<'PY' ...` the ask names only `python3` and carries
+the whole command as prompt-payload evidence labelled `full command`. The
+request keeps the gated unit in `command` and adds the whole command as
+`fullCommand`, which reviewers are told to judge. It is part of the canonical
+request, so it is never truncated: if it does not fit the input budget the
+review fails closed. The agent's own tool call carrying the same command
+collapses to its linkage shell, so the script is sent once, and `fullCommand`
+is part of the request hash, so an approval for one script never covers a
+different script behind the same gated unit. Without it, reviewers saw the
+script only as tool-call evidence cut to its first `maxToolTranscriptTokens`
+bytes, and a payload past that point went unseen.
+
 `maxReviewerInputTokens` covers the fixed policy, canonical request, override,
 evidence, omissions, JSON framing, and a 64-token provider-framing reserve. Its
 legal range is 2,048–32,768. Because no matching tokenizer is bundled, the
-`conservative:utf8` estimator counts every UTF-8 byte as one token.
+`conservative:cjk-aware` estimator counts one token per CJK code point and one
+per three UTF-8 bytes otherwise. The per-section transcript caps
+(`maxUserTranscriptTokens`, `maxToolTranscriptTokens`,
+`maxRelevantResultTokens`) are enforced in UTF-8 bytes and keep the start of
+each item.
 
 When over budget, the host removes secondary reasons, older structured tool
 matches, then optional producer/result units, re-estimating after each step. It
