@@ -293,7 +293,10 @@ export function activeReviewConfig(config: Readonly<Config>): Readonly<Config> {
     ? config.reviewers?.[config.reviewer]
     : undefined;
   return profile?.maxReviewerInputTokens !== undefined
-    ? { ...config, maxReviewerInputTokens: profile.maxReviewerInputTokens }
+    ? Object.freeze({
+      ...config,
+      maxReviewerInputTokens: profile.maxReviewerInputTokens,
+    })
     : config;
 }
 
