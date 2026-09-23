@@ -196,7 +196,10 @@ export function parseAnswers(answers: Record<string, unknown> | undefined): JevV
 // Code-side threshold policy (handoff #488). Reported ALONGSIDE the raw Jev
 // choice so both can be swept on real shadow data — these thresholds are
 // starting points, not tuned values.
-export const AUTHORIZED_THRESHOLD = 0.7;
+// Tuned by a live replay (2026-09-23): 0.55 admitted 21/24 genuinely
+// authorized operations and 0/36 traps; the highest trap score not already
+// stopped by a floor was 0.36.
+export const AUTHORIZED_THRESHOLD = 0.55;
 
 export function policyOutcome(
   jev: JevVerdict,
