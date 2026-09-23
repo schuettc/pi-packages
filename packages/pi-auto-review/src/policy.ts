@@ -21,12 +21,15 @@ export type PermissionDetailsLike = {
   toolInputPreview?: unknown;
   accessIntent?: unknown;
   forwarding?: unknown;
+  payload?: unknown;
 };
 
 export type NormalizedPermissionEvidence = {
   surface: string;
   value?: string;
   command?: string;
+  /** The whole shell command when `command` is only the gated unit of it. */
+  fullCommand?: string;
   path?: string;
   resolvedPath?: string;
   destination?: string;
@@ -155,6 +158,7 @@ export type RelevantBoundaryRequest = {
   operation?: string;
   cwd?: string;
   command?: string;
+  fullCommand?: string;
   path?: string;
   resolvedPath?: string;
   destination?: string;
@@ -355,10 +359,12 @@ export function normalizePermissionEvidence(
     nonEmptyString(details.agentName) ??
     nonEmptyString(forwarding?.requesterAgentName);
   const sessionId = nonEmptyString(forwarding?.requesterSessionId);
+  const full = fullCommandEvidence(details.payload);
   return {
     surface,
     value,
     command,
+    ...(full !== undefined && full !== command ? { fullCommand: full } : {}),
     path,
     resolvedPath: accessIntent?.boundaryValue,
     destination,
@@ -366,6 +372,20 @@ export function normalizePermissionEvidence(
     requester:
       agentName || sessionId ? { agentName, sessionId } : undefined,
   };
+}
+
+// pi-permission-system gates a bash command per unit: for a heredoc such as
+// `python3 - <<'PY' ...` the ask names only `python3` and carries the whole
+// command as prompt-payload evidence labelled "full command". Reviewers need
+// that whole command to judge what will actually run.
+function fullCommandEvidence(payload: unknown): string | undefined {
+  const evidence = record(payload)?.evidence;
+  if (!Array.isArray(evidence)) return undefined;
+  for (const item of evidence) {
+    const entry = record(item);
+    if (entry?.label === "full command") return nonEmptyString(entry.text);
+  }
+  return undefined;
 }
 
 export function effectiveCommand(details: PermissionDetailsLike): string | undefined {
@@ -840,7 +860,7 @@ function relevanceReason(
   | "provider-branch-protection"
   | undefined {
   if (request.toolCallId && call.id === request.toolCallId) return "same-tool";
-  const currentCommand = request.command || "";
+  const currentCommand = request.fullCommand || request.command || "";
   const priorCommand = commandArgument(call);
   const pushedBranch = explicitPushBranch(currentCommand);
   const providerQuery = providerBranchQuery(priorCommand);
@@ -997,8 +1017,9 @@ function surfaceProfile(
 ): EvidenceSurfaceProfile {
   if (request.agentName || request.requesterSessionId) return "forwarded";
   if (request.surface === "network" || request.destination) return "network";
-  if (/\bgit\b[\s\S]*\bpush\b/i.test(request.command ?? "")) return "git-push";
-  if (/\b(?:rm|rmdir|unlink|trash|delete)\b/i.test(request.command ?? "")) {
+  const operation = request.fullCommand ?? request.command ?? "";
+  if (/\bgit\b[\s\S]*\bpush\b/i.test(operation)) return "git-push";
+  if (/\b(?:rm|rmdir|unlink|trash|delete)\b/i.test(operation)) {
     return "delete";
   }
   return "generic";
@@ -1044,6 +1065,7 @@ function exactStructuredMatch(
   const args = call.arguments as Record<string, unknown>;
   const pairs: Array<[unknown, unknown]> = [
     [args.command, request.command],
+    [args.command, request.fullCommand],
     [args.path, request.path],
     [args.resolvedPath, request.resolvedPath],
     [args.destination, request.destination],
@@ -1101,6 +1123,11 @@ function toolArgumentCoveredByRequest(
   }
   if (key === "value") {
     return [request.command, request.path, request.destination].some(
+      (expected) => sameReviewerField(actual, expected),
+    );
+  }
+  if (key === "command") {
+    return [request.command, request.fullCommand].some(
       (expected) => sameReviewerField(actual, expected),
     );
   }

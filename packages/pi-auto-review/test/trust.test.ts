@@ -11,7 +11,7 @@ import {
   loadTrustedConfig,
   userConfigPath,
 } from "../src/index.ts";
-import { DEFAULT_CONFIG, validateConfig } from "../src/review/config.ts";
+import { activeReviewConfig, DEFAULT_CONFIG, validateConfig } from "../src/review/config.ts";
 
 const TEST_TMP_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -156,6 +156,30 @@ test("user config can fully overlay package trusted settings", () => {
       },
     }),
   );
+  const budgeted = applyUserConfig(packageConfig, {
+    reviewer: "jev",
+    reviewers: {
+      jev: { model: "jev-latest", engine: "jev", maxReviewerInputTokens: 32_768 },
+      sonnet: { model: "claude-bridge/claude-sonnet-4-6", reasoning: "off", maxReviewerInputTokens: 16_384 },
+    },
+  });
+  assert.equal(budgeted.reviewers?.jev?.maxReviewerInputTokens, 32_768);
+  assert.equal(budgeted.reviewers?.sonnet?.maxReviewerInputTokens, 16_384);
+  // The base budget is untouched; the profile's applies only to its reviews.
+  assert.equal(budgeted.maxReviewerInputTokens, packageConfig.maxReviewerInputTokens);
+  assert.equal(activeReviewConfig(budgeted).maxReviewerInputTokens, 32_768);
+  assert.equal(
+    activeReviewConfig({ ...budgeted, reviewer: "sonnet" }).maxReviewerInputTokens,
+    16_384,
+  );
+  for (const bad of [2_047, 32_769, 1.5, "32768"]) {
+    assert.throws(() =>
+      applyUserConfig(packageConfig, {
+        reviewers: { jev: { model: "jev-latest", engine: "jev", maxReviewerInputTokens: bad } },
+      }),
+    );
+  }
+
   const prototypeNamed = applyUserConfig(
     packageConfig,
     JSON.parse(JSON.stringify({
