@@ -79,6 +79,7 @@ import {
   activeReviewConfig,
   selectReviewerProfile,
   sessionConfig,
+  standingAuthorizationsFor,
   userReviewMetaFromResult,
   userConfigPath,
   validateConfig,
@@ -92,6 +93,11 @@ import {
   type ReviewerTelemetryEvent,
 } from "./review/index.ts";
 import { ReviewExecutionError } from "./review/index.ts";
+import {
+  AuthorizationLedger,
+  lastAssistantText,
+  shouldRecordInput,
+} from "./review/authorization-ledger.ts";
 import type { JevClient } from "pi-typesafe-ai";
 
 export type ResolveJevClient = (profile: {
@@ -237,6 +243,8 @@ export function createPiAutoReviewExtension(
   let shuttingDown = false;
   let disposeBrokerService: (() => void) | undefined;
   const reviewResults = new Map<string, ReviewResult>();
+  // What the human typed this session (see review/authorization-ledger.ts).
+  const authorizationLedger = new AuthorizationLedger();
   const telemetryCompleted = new Set<string>();
   let broker: BoundaryApprovalBroker | undefined;
   // Reviewer metadata is re-resolved per review (see ReviewerMeta above),
@@ -336,6 +344,10 @@ export function createPiAutoReviewExtension(
               {
                 client: resolveJevClientDep(activeProfile),
                 dispatchStartedAt,
+                authorizations: {
+                  ledger: authorizationLedger.entries(),
+                  standing: standingAuthorizationsFor(reviewConfig, request.cwd),
+                },
               },
             );
           } else {
@@ -727,6 +739,21 @@ export function createPiAutoReviewExtension(
     },
   });
 
+  // Record what the human types, with the assistant text it answers, so the
+  // Jev reviewer can honor a planning-session authorization after compaction
+  // or behind a stream of channel notifications.
+  pi.on("input", (event, ctx) => {
+    try {
+      if (!shouldRecordInput(event)) return;
+      authorizationLedger.record({
+        text: event.text,
+        inReplyTo: lastAssistantText(ctx.sessionManager.buildContextEntries()),
+      });
+    } catch {
+      // Recording is best-effort; it must never block the human's input.
+    }
+  });
+
   pi.on("session_start", (_event, ctx) => {
     shuttingDown = false;
     registrationEpoch++;
@@ -738,6 +765,7 @@ export function createPiAutoReviewExtension(
     broker?.clear();
     reviewResults.clear();
     telemetryCompleted.clear();
+    authorizationLedger.clear();
     uiAutoConfirmer.clear();
     try {
       config = sessionConfig(

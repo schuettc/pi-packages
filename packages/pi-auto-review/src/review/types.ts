@@ -42,7 +42,14 @@ export type Config = {
   grantTtlMs: number;
   autoConfirmBoundedAllows: readonly BoundedSurface[];
   policyAudit: Readonly<PolicyAuditConfig>;
+  /**
+   * Human-written standing authorizations for routine work (trusted user
+   * config only). A rule with a scope applies when the request cwd is inside it.
+   */
+  standingAuthorizations?: readonly Readonly<StandingAuthorization>[];
 };
+
+export type StandingAuthorization = { scope?: string; rule: string };
 
 export type CompletionMessage = {
   stopReason?: string;
@@ -185,6 +192,7 @@ export type ReviewerTelemetryEvent =
         risk?: number;
         haz?: { credential?: number; wipe?: number; control?: number };
         conf?: number;
+        auth?: number;
       };
       jevDiagnostics?: JevDiagnostics;
       attempts: number;

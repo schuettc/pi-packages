@@ -8,6 +8,7 @@ export {
   loadTrustedConfig,
   packageConfigPath,
   activeReviewConfig,
+  standingAuthorizationsFor,
   selectReviewerProfile,
   userConfigPath,
   validateConfig,
