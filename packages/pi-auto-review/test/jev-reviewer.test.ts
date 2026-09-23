@@ -42,6 +42,16 @@ test("buildJevState mirrors request identity + evidence + ceiling", () => {
   assert.deepEqual(s.evidence.userMessages, ["clean temp"]);
 });
 
+test("buildJevState carries the full command next to the gated unit", () => {
+  const s = buildJevState(
+    { ...request, command: "python3", fullCommand: "python3 - <<'PY'\nprint(1)\nPY" },
+    transcript,
+  ) as any;
+  assert.equal(s.request.command, "python3");
+  assert.equal(s.request.fullCommand, "python3 - <<'PY'\nprint(1)\nPY");
+  assert.equal("fullCommand" in (buildJevState(request, transcript) as any).request, false);
+});
+
 test("parseAnswers maps SDK answer shape", () => {
   const v = parseAnswers({ outcome: { type: "choice", choice: "deny", confidence: 0.9 }, risk_level: { type: "score", score: 3 }, hazard_credential_exfiltration: { type: "noul", noul: 0.9 } });
   assert.equal(v.outcome, "deny"); assert.equal(v.risk, 3); assert.equal(v.haz?.credential, 0.9);
