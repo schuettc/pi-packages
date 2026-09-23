@@ -52,6 +52,18 @@ test("buildJevState carries the full command next to the gated unit", () => {
   assert.equal("fullCommand" in (buildJevState(request, transcript) as any).request, false);
 });
 
+test("buildJevState carries non-bash tool input, skill and requester", () => {
+  const s = buildJevState(
+    { ...request, command: undefined, surface: "schedule", toolName: "schedule", toolInputPreview: 'input {"action":"list"}', skillName: "writing-plans", agentName: "worker-a" } as never,
+    transcript,
+  ) as any;
+  assert.equal(s.request.toolInputPreview, 'input {"action":"list"}');
+  assert.equal(s.request.skillName, "writing-plans");
+  assert.equal(s.request.agentName, "worker-a");
+  const bare = buildJevState(request, transcript) as any;
+  for (const key of ["toolInputPreview", "skillName", "agentName"]) assert.equal(key in bare.request, false);
+});
+
 test("parseAnswers maps SDK answer shape", () => {
   const v = parseAnswers({ outcome: { type: "choice", choice: "deny", confidence: 0.9 }, risk_level: { type: "score", score: 3 }, hazard_credential_exfiltration: { type: "noul", noul: 0.9 } });
   assert.equal(v.outcome, "deny"); assert.equal(v.risk, 3); assert.equal(v.haz?.credential, 0.9);
