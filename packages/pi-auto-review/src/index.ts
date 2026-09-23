@@ -670,6 +670,7 @@ export function createPiAutoReviewExtension(
           `Surface: ${request.surface}`,
           `Working directory: ${request.cwd}`,
           `Command/target: ${String(target).replace(/\s+/g, " ").slice(0, 300)}`,
+          ...fullCommandConfirmLines(request.fullCommand),
           `Request fingerprint: ${denial.requestHash.slice(0, 12)}`,
           "This authorizes only one exact retry and cannot override local hard-deny rules.",
         ].join("\n"),
@@ -997,6 +998,26 @@ export function createPiAutoReviewExtension(
     await policyAudit.close();
   });
   };
+}
+
+const BREAK_GLASS_FULL_COMMAND_CHARACTERS = 4_000;
+
+// Break-glass skips the reviewer, so the human is the last gate: show the
+// whole command they are authorizing (a heredoc's script, not just the gated
+// `python3`), and say so plainly when it is too long to show in full.
+function fullCommandConfirmLines(fullCommand: string | undefined): string[] {
+  if (fullCommand === undefined) return [];
+  const total = fullCommand.length;
+  const shown = fullCommand.slice(0, BREAK_GLASS_FULL_COMMAND_CHARACTERS);
+  return [
+    `Full command (${total} characters):`,
+    shown,
+    ...(total > shown.length
+      ? [
+          `Only the first ${BREAK_GLASS_FULL_COMMAND_CHARACTERS.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} characters are shown; review the agent's tool call before confirming.`,
+        ]
+      : []),
+  ];
 }
 
 export default function piAutoReview(pi: ExtensionAPI): void {
