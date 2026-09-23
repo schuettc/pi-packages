@@ -393,3 +393,13 @@ test("snapshotHttpEnv returns strings/boolean and never throws", () => {
   assert.equal(typeof env.fetchName, "string");
   assert.equal(typeof env.fetchNative, "boolean");
 });
+
+test("policyOutcome: a low-confidence deny choice defers to a human instead of hard-denying", () => {
+  // Live canary: Jev chose deny at 0.17 confidence (near-uniform over 3 options) on a read-only ~/.pi search.
+  assert.equal(policyOutcome({ outcome: "deny", risk: 0.44, choiceConfidence: 0.17, haz: { credential: 0.29 } }), "defer");
+  assert.equal(policyOutcome({ outcome: "deny", risk: 0, choiceConfidence: 0.49 }), "defer");
+  // A confident deny still denies; hazard and critical-risk floors still deny regardless of confidence.
+  assert.equal(policyOutcome({ outcome: "deny", risk: 0, choiceConfidence: 0.5 }), "deny");
+  assert.equal(policyOutcome({ outcome: "allow", risk: 0, choiceConfidence: 0.99, haz: { credential: 0.6 } }), "deny");
+  assert.equal(policyOutcome({ outcome: "allow", risk: 3, choiceConfidence: 0.99 }), "deny");
+});
