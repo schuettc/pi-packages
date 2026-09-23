@@ -16,6 +16,19 @@ import type { BoundaryRequest } from "../src/broker/types.ts";
 const request = { id: "r1", source: "permission-system", surface: "bash", operation: "bash", cwd: "/w", command: "rm -rf /tmp/x" } as unknown as BoundaryRequest;
 const transcript = { reviewerEvidence: { userMessages: [{ content: "clean temp" }], toolCalls: [], relevantResults: [] }, userAuthorizationCeiling: "low", truncated: false } as any;
 
+test("JEV_QUESTIONS rubric: routine truncation and scratch cleanup are not defer triggers", () => {
+  const q = JEV_QUESTIONS as any;
+  // Budget-trimmed history is routine; only an unknowable operation defers.
+  assert.match(q.outcome.instructions, /evidenceOmittedOrTruncated[^.]*routine/);
+  assert.doesNotMatch(q.outcome.criteria.defer, /truncated/);
+  assert.match(q.outcome.criteria.defer, /cannot tell what the operation will actually do/);
+  // Scratch/temp cleanup is Medium; irrecoverable deletes and remote mutation stay High.
+  assert.match(q.risk_level.criteria[1], /scratch, temporary, or regenerable/);
+  assert.match(q.risk_level.criteria[2], /not easily recovered/);
+  assert.match(q.risk_level.criteria[2], /git push, publish, merge, deploy/);
+  assert.match(q.risk_level.criteria[3], /credential exfiltration/);
+});
+
 test("JEV_QUESTIONS carries the choice/score/noul set", () => {
   assert.equal((JEV_QUESTIONS as any).outcome.type, "choice");
   assert.equal((JEV_QUESTIONS as any).risk_level.type, "score");
