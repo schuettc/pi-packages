@@ -177,7 +177,10 @@ export function policyOutcome(jev: JevVerdict): "allow" | "deny" | "defer" {
   const risk = Math.round(jev.risk ?? 0);
   if (haz >= 0.6) return "deny";
   if (risk >= 3) return "deny";
-  if (jev.outcome === "deny") return "deny";
+  // A deny CHOICE is only decisive when Jev is confident; a near-uniform
+  // distribution is uncertainty, which goes to a human (defer), not a hard deny.
+  // Hazard and critical-risk floors above still deny regardless of confidence.
+  if (jev.outcome === "deny") return (jev.choiceConfidence ?? 1) >= 0.5 ? "deny" : "defer";
   if (risk >= 2 || jev.outcome === "defer") return "defer";
   if (jev.outcome !== "allow") return "defer"; // no valid allow choice → fail safe
   if ((jev.choiceConfidence ?? 1) < 0.5) return "defer";
