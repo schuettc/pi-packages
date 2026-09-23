@@ -1,34 +1,88 @@
 #!/usr/bin/env bash
-# Rebase our fork's patch stack onto upstream/main and, on a clean rebase,
-# publish the next <upstream-base>-schuettc.N of packages/pi-auto-review to npm.
-# On conflicts: abort, open a tracking issue, and FAIL the job (exit 1) so the
-# red run + issue email are the signal. Invoked by .github/workflows/upstream-sync.yml.
+# Canonical fork-sync script for @schuettc/* republished forks.
+# Source of truth: tools-ops/templates/fork-sync/upstream-sync.sh — every fork
+# carries this file BYTE-IDENTICAL; per-fork settings live only in the
+# workflow's `env:` block. Verify conformance with tools-ops/templates/fork-sync/check.sh.
 #
-# Reharden (2026-09-22, see tools-ops audit 2026-09-22-fork-publish-sync-audit):
-#   - The committed patch carries ONLY genuine source patches + CI. ALL packaging
-#     metadata (scoped name, -schuettc.N version, repo/homepage) is applied at
-#     publish time in the isolated copy, never committed. So upstream's
-#     every-release version/name/lockfile churn can no longer conflict; only a
-#     genuine overlap on our source patches stops the pipeline.
-#   - A conflict opens a tracking issue AND fails the job (exit 1) so the red run
-#     + issue email are the signal.
-set -euo pipefail
+# Model (see templates/fork-sync/README.md):
+#   - schuettc-publish = upstream + genuine source patches + this CI. It never
+#     carries packaging metadata (scoped name, -schuettc.N version, repo URLs).
+#   - Daily: rebase onto upstream. Clean -> stamp metadata into an isolated copy
+#     of the package, publish via npm OIDC trusted publishing (provenance), push
+#     the rebased branch + a tag. Conflict or any other failure -> open (or reuse)
+#     a tracking issue that @mentions the owner, and fail the run.
+#
+# Required env (set in the workflow):
+#   UPSTREAM_REPO    owner/name of the upstream repo
+#   UPSTREAM_BRANCH  upstream branch to track (main, master, ...)
+#   PKG_NAME         published name, e.g. @schuettc/pi-claude-bridge
+#   PKG_DIR          package directory relative to the repo root ("." for root)
+#   TAG_PREFIX       git tag prefix for releases, e.g. "v" or "pi-auto-review-v"
+# Optional env:
+#   BUILD_CMD        command run (repo root) before packing, when the package ships built output
+#   FORCE            "true" publishes even when already in sync
+#   NOTIFY_TEST      "true" opens + closes a test issue to prove notifications, then exits
+# Provided by Actions: GITHUB_REPOSITORY, GITHUB_REPOSITORY_OWNER, GITHUB_SERVER_URL, GITHUB_RUN_ID, GH_TOKEN
+set -Eeuo pipefail
 
-PKG="@schuettc/pi-auto-review"
-PKGDIR="packages/pi-auto-review"
-UPSTREAM_URL="https://github.com/erichll/pi-packages.git"
+: "${UPSTREAM_REPO:?}" "${UPSTREAM_BRANCH:?}" "${PKG_NAME:?}" "${PKG_DIR:?}" "${TAG_PREFIX:?}"
+FORCE="${FORCE:-false}"
+NOTIFY_TEST="${NOTIFY_TEST:-false}"
 BRANCH="schuettc-publish"
-FORCE="${1:-false}"
+FORK="${GITHUB_REPOSITORY:?}"
+RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${FORK}/actions/runs/${GITHUB_RUN_ID:-local}"
+PHASE="setup"
 
+# Always address the fork explicitly: gh otherwise prefers a remote named
+# "upstream" as its default repo and would try to file issues on the upstream
+# project, where this token has no rights.
+gh_fork() { gh "$@" -R "$FORK"; }
+
+open_issue() { # title body -> creates or comments on an open issue with that title
+  local title="$1" body="$2" num
+  body="$(printf '%s\n\nRun: %s\n\ncc @%s' "$body" "$RUN_URL" "${GITHUB_REPOSITORY_OWNER:-}")"
+  num="$(gh_fork issue list --state open --search "\"$title\" in:title" --json number,title \
+    --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+  if [ -n "$num" ]; then
+    gh_fork issue comment "$num" --body "$body" >/dev/null && echo "Commented on existing issue #$num."
+  else
+    gh_fork issue create --title "$title" --body "$body" && echo "Opened tracking issue."
+  fi
+}
+
+on_error() {
+  local rc=$? line="$1"
+  trap - ERR
+  git rebase --abort >/dev/null 2>&1 || true
+  open_issue "upstream-sync failed: ${PKG_NAME}" \
+    "The upstream-sync run failed in phase \`${PHASE}\` (line ${line}, exit ${rc}). Nothing was published after the failure point." \
+    || echo "::warning::Could not open tracking issue."
+  echo "::error::upstream-sync failed in phase ${PHASE}."
+  exit "$rc"
+}
+trap 'on_error $LINENO' ERR
+
+if [ "$NOTIFY_TEST" = "true" ]; then
+  PHASE="notify-test"
+  url="$(gh_fork issue create --title "upstream-sync notification test (${PKG_NAME})" \
+    --body "$(printf 'Test issue opened by the upstream-sync notify_test input to prove the alert path reaches the owner. Safe to ignore; closed automatically.\n\nRun: %s\n\ncc @%s' "$RUN_URL" "${GITHUB_REPOSITORY_OWNER:-}")")"
+  echo "Opened ${url}"
+  gh_fork issue close "$url" --comment "Notification test complete." >/dev/null
+  echo "Closed ${url}. If you received the email/notification, the alert path works."
+  exit 0
+fi
+
+PHASE="fetch-upstream"
 git config user.name "schuettc-fork-bot"
 git config user.email "actions@github.com"
+git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null \
+  || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+git fetch upstream "$UPSTREAM_BRANCH" --quiet
+UP="upstream/${UPSTREAM_BRANCH}"
 
-git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
-git fetch upstream main --quiet
-
-base="$(git merge-base HEAD upstream/main)"
-ahead="$(git rev-list --count "${base}..upstream/main")"
-echo "upstream/main is ${ahead} commit(s) ahead of our base ${base}"
+base="$(git merge-base HEAD "$UP")"
+ahead="$(git rev-list --count "${base}..${UP}")"
+echo "${UP} is ${ahead} commit(s) ahead of our base ${base}"
 
 if [ "$ahead" -eq 0 ] && [ "$FORCE" != "true" ]; then
   echo "In sync; nothing to publish."
@@ -36,27 +90,28 @@ if [ "$ahead" -eq 0 ] && [ "$FORCE" != "true" ]; then
 fi
 
 if [ "$ahead" -gt 0 ]; then
-  echo "Rebasing our patch stack onto upstream/main..."
-  if ! git rebase upstream/main; then
-    upstream_log="$(git --no-pager log --oneline "${base}..upstream/main")"
+  PHASE="rebase"
+  echo "Rebasing our patch stack onto ${UP}..."
+  if ! git rebase "$UP"; then
+    trap - ERR
+    upstream_log="$(git --no-pager log --oneline "${base}..${UP}")"
     git rebase --abort || true
-    title="upstream sync: manual rebase needed (${ahead} new upstream commit(s))"
-    body="$(printf 'Automated rebase of %s onto erichll/main hit conflicts on genuine source patches and was aborted — nothing was published.\n\nNew upstream commits:\n\n```\n%s\n```\n\nResolve locally: rebase %s onto upstream/main, force-push, then re-run the upstream-sync workflow (or let the next daily run pick it up).' "$BRANCH" "$upstream_log" "$BRANCH")"
-    if [ "$(gh issue list --state open --search "$title in:title" --json number --jq 'length')" = "0" ]; then
-      gh issue create --title "$title" --body "$body" \
-        || echo "::warning::Could not open tracking issue; conflicts still need manual resolution."
-    else
-      echo "A conflict issue is already open; skipping duplicate."
-    fi
-    echo "::error::upstream-sync rebase conflicted; published nothing. See the tracking issue."
+    open_issue "upstream sync: manual rebase needed (${PKG_NAME})" \
+      "$(printf 'Rebasing `%s` onto `%s` hit conflicts on our source patches and was aborted. Nothing was published.\n\nNew upstream commits (%s):\n\n```\n%s\n```\n\nResolve locally: rebase `%s` onto `%s`, force-push, then re-run the workflow (or wait for the next daily run).' \
+        "$BRANCH" "$UP" "$ahead" "$upstream_log" "$BRANCH" "$UP")" \
+      || echo "::warning::Could not open tracking issue."
+    echo "::error::Rebase conflicted; published nothing."
     exit 1
   fi
 fi
 
-upstream_ver="$(git show "upstream/main:${PKGDIR}/package.json" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')"
+PHASE="version"
+DIR_FIELD="${PKG_DIR#./}"; DIR_FIELD="${DIR_FIELD%/}"; [ "$DIR_FIELD" = "." ] && DIR_FIELD=""
+PKG_JSON="${DIR_FIELD:+${DIR_FIELD}/}package.json"
+upstream_ver="$(git show "${UP}:${PKG_JSON}" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')"
 echo "upstream base version: ${upstream_ver}"
 
-published="$(npm view "$PKG" versions --json 2>/dev/null || echo '[]')"
+published="$(npm view "$PKG_NAME" versions --json 2>/dev/null || echo '[]')"
 next_n="$(BASE="$upstream_ver" PUBLISHED="$published" node -e '
   const base = process.env.BASE;
   let v = [];
@@ -70,30 +125,37 @@ next_n="$(BASE="$upstream_ver" PUBLISHED="$published" node -e '
 new_ver="${upstream_ver}-schuettc.${next_n}"
 echo "publishing new version: ${new_ver}"
 
-# Publish from an isolated copy: `npm publish --provenance` from inside the
-# monorepo builds the arborist tree and hits a null workspace self-node. A
-# standalone copy has no workspace context. Provenance reads the build identity
-# from the CI OIDC token + GITHUB_* env, so the copy is fine. ALL packaging
-# metadata is stamped HERE only — never committed to the branch — so the next
-# upstream release replays our source patches with zero metadata conflicts.
+if [ -n "${BUILD_CMD:-}" ]; then
+  PHASE="build"
+  echo "Building: ${BUILD_CMD}"
+  bash -c "$BUILD_CMD"
+fi
+
+# Publish from an isolated copy with packaging metadata stamped in. This keeps
+# the branch free of fork metadata and sidesteps workspace/arborist issues in
+# monorepos. Provenance is bound to the OIDC token + GITHUB_* env, not the cwd.
+PHASE="publish"
 pubdir="$(mktemp -d)"
-cp -R "$PKGDIR/." "$pubdir/"
-PKG="$PKG" VER="$new_ver" node -e '
-  const fs=require("fs"), f=process.argv[1], p=JSON.parse(fs.readFileSync(f));
-  p.name = process.env.PKG;
-  p.version = process.env.VER;
-  p.repository = { type: "git", url: "git+https://github.com/schuettc/pi-packages.git", directory: "packages/pi-auto-review" };
-  p.homepage = "https://github.com/schuettc/pi-packages/tree/main/packages/pi-auto-review";
+rsync -a --exclude .git --exclude node_modules "${PKG_DIR%/}/" "$pubdir/"
+PKG_NAME="$PKG_NAME" VER="$new_ver" FORK="$FORK" DIR_FIELD="$DIR_FIELD" node -e '
+  const fs = require("fs"), f = process.argv[1], p = JSON.parse(fs.readFileSync(f));
+  const { PKG_NAME, VER, FORK, DIR_FIELD } = process.env;
+  p.name = PKG_NAME;
+  p.version = VER;
+  p.repository = { type: "git", url: `git+https://github.com/${FORK}.git`, ...(DIR_FIELD ? { directory: DIR_FIELD } : {}) };
+  p.homepage = DIR_FIELD ? `https://github.com/${FORK}/tree/schuettc-publish/${DIR_FIELD}#readme` : `https://github.com/${FORK}#readme`;
+  p.bugs = { url: `https://github.com/${FORK}/issues` };
+  delete p.private;
   fs.writeFileSync(f, JSON.stringify(p, null, 2) + "\n");
 ' "$pubdir/package.json"
 ( cd "$pubdir" && npm publish --provenance --access public --tag latest )
 rm -rf "$pubdir"
 
-# Keep schuettc-publish current (rebased onto upstream, our source patches on
-# top) so tomorrow's run sees ahead=0. The branch stays upstream-named; the
-# scoped name + -schuettc.N live only on npm + the tag.
+# Keep schuettc-publish rebased so tomorrow's run sees ahead=0. The branch keeps
+# upstream's name/version; the scoped name and -schuettc.N live on npm + the tag.
+PHASE="push"
 git push --force-with-lease origin "HEAD:${BRANCH}"
-git tag "pi-auto-review-v${new_ver}"
-git push origin "pi-auto-review-v${new_ver}"
+git tag "${TAG_PREFIX}${new_ver}"
+git push origin "${TAG_PREFIX}${new_ver}"
 
-echo "Published ${PKG}@${new_ver}; pushed ${BRANCH} + tag pi-auto-review-v${new_ver}."
+echo "Published ${PKG_NAME}@${new_ver}; pushed ${BRANCH} + tag ${TAG_PREFIX}${new_ver}."
