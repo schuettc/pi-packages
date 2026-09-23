@@ -135,6 +135,47 @@ In interactive TUI sessions, `/auto-review-model` selects among these trusted
 profiles for the remainder of the current session. The selection is not
 persisted and projects cannot define profiles or select one.
 
+### The `jev` reviewer profile
+
+A reviewer profile may set `engine: "jev"` to run the boundary check through
+the Jev (System One) classifier from `pi-typesafe-ai` instead of a chat-model
+completion. It sees the same budgeted, explicitly untrusted evidence the model
+reviewer sees and maps a typed verdict (choice, risk score, and three hazard
+probes) to the same allow/deny/defer decision.
+
+```json
+{
+  "reviewer": "sonnet",
+  "reviewers": {
+    "sonnet": {
+      "model": "claude-bridge/claude-sonnet-4-6",
+      "reasoning": "off"
+    },
+    "jev": {
+      "model": "openai/gpt-5.6",
+      "reasoning": "off",
+      "engine": "jev"
+    }
+  }
+}
+```
+
+The `jev` engine ships off by default: the default reviewer stays `sonnet` (a
+regular model completion), and Jev runs only when a `jev` profile is the active
+reviewer, selected at startup with `reviewer` or in-session with
+`/auto-review-model`. Requirements and guarantees:
+
+- **Requires `pi-typesafe-ai`** plus a configured key. Set the key once with
+  `/typesafe setup`; the reviewer resolves credentials from the same TypeSafe
+  directory that command writes to, so no restart is needed.
+- **Fails closed.** Any client error, timeout, or malformed answer is wrapped
+  as a review failure and the session's `failureMode` (`deny` by default)
+  applies — Jev never fails open into an allow.
+- **The deterministic hard-rule floor still applies.** Hard denies (recursive
+  forced wipes of `/`, `~`, `$HOME`, protected-write denials, and the rest of
+  the deterministic layer) run before any engine and cannot be overridden by a
+  Jev allow, exactly as with the model reviewer.
+
 For a complete `@gotgenes/pi-permission-system` config that wires
 `pi-auto-review` into the authorizer chain — a copyable baseline covering
 read/write/edit, a read-only bash allowlist, an MCP discovery policy, and a
@@ -449,7 +490,10 @@ an input to this audit and supplies no RTK token or parsing metrics.
 ## Telemetry
 
 Every actual model call emits an internal `review_attempt`; each approval emits
-one `review_complete`. Events contain stable status/error classes, timings,
+one `review_complete`. Each `review_complete` carries an `engine` field
+(`"model"` or `"jev"`); a `jev` review additionally reports the compact Jev
+signal (`jev.risk`, `jev.haz`, and `jev.conf`) so policy-audit sweeps can
+capture it. Events contain stable status/error classes, timings,
 usage counters, evidence metadata, and prompt-part counts. They do not contain
 prompt or response text, provider errors, credentials, headers, or URL query
 values. Usage is marked `unknown_provenance` when pi-ai cannot distinguish
