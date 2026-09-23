@@ -103,6 +103,7 @@ test("JEV_QUESTIONS asks about human authorization and keystroke injection", () 
   assert.equal(q.user_authorization.type, "noul");
   assert.match(q.user_authorization.instructions, /humanAuthorizations/);
   assert.match(q.user_authorization.instructions, /never count/i);
+  assert.match(q.user_authorization.instructions, /inReplyTo is agent-authored/);
   assert.match(q.hazard_control_tampering.instructions, /tmux send-keys/);
   assert.match(q.outcome.criteria.allow, /human authorized/);
 });
