@@ -1367,3 +1367,28 @@ test("Sandbox Runtime adds no trap block when the canonical request is complete"
   assert.doesNotMatch(transcript.text, /<sandbox-trap>/);
   assert.equal(transcript.failureCode, undefined);
 });
+
+test("normalizePermissionEvidence reads the full command from the prompt payload", () => {
+  const full = "python3 - <<'PY'\nprint(1)\nPY";
+  const payload = (evidence: unknown) => ({ kind: "bash", request: {}, evidence, annotations: [] });
+  const withFull = normalizePermissionEvidence({
+    surface: "bash",
+    command: "python3",
+    payload: payload([
+      { label: "rule", text: "*", detail: null },
+      { label: "full command", text: full, detail: null },
+    ]),
+  });
+  assert.equal(withFull.command, "python3");
+  assert.equal(withFull.fullCommand, full);
+  // Equal to the gated command: nothing to add.
+  assert.equal(normalizePermissionEvidence({
+    surface: "bash",
+    command: full,
+    payload: payload([{ label: "full command", text: full, detail: null }]),
+  }).fullCommand, undefined);
+  // Malformed payloads are ignored rather than trusted.
+  for (const bad of [undefined, null, "x", { evidence: "x" }, payload([{ label: "full command", text: 7 }]), payload([{ label: "full command", text: "   " }])]) {
+    assert.equal(normalizePermissionEvidence({ surface: "bash", command: "python3", payload: bad }).fullCommand, undefined);
+  }
+});

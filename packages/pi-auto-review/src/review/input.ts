@@ -110,6 +110,9 @@ export function boundaryRequest(
     operation: details.source || surface,
     cwd: ctx.cwd,
     command: evidence.command,
+    ...(evidence.fullCommand !== undefined
+      ? { fullCommand: evidence.fullCommand }
+      : {}),
     path: evidence.path,
     resolvedPath: evidence.resolvedPath,
     destination: evidence.destination,
