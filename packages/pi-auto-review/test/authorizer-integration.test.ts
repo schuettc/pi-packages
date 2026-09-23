@@ -3477,6 +3477,38 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     assert.equal(floored.approved, false);
   });
 
+  await t.test("a non-bash tool's input reaches Jev even when the tool call collapses to a link", async () => {
+    const states: any[] = [];
+    const instance = harness(deny, {
+      config: jevConfig(),
+      resolveJevClient: () => ({
+        async evaluate(state: unknown) {
+          states.push(state);
+          return { answers: allowAnswers, latencyMs: 1 };
+        },
+      }),
+      contextEntries: [
+        { message: { role: "user", content: "list the schedules" } },
+        { message: { role: "assistant", content: [{ type: "toolCall", id: "call-sched", name: "schedule", arguments: { action: "list" } }] } },
+      ],
+    });
+    try {
+      await instance.authorize("schedule", {
+        requestId: "jev-tool-input",
+        toolCallId: "call-sched",
+        toolName: "schedule",
+        toolInputPreview: 'input {"action":"list"}',
+      });
+      const state = states.at(-1);
+      assert.equal(state.request.toolInputPreview, 'input {"action":"list"}');
+      // The evidence copy collapses to a link, so the request is the only place
+      // Jev can see the arguments.
+      assert.doesNotMatch(JSON.stringify(state.evidence.toolCalls), /"action"/);
+    } finally {
+      instance.dispose();
+    }
+  });
+
   await t.test("a jev client throw fails closed to the configured failureMode", async () => {
     const instance = harness(allow, {
       config: jevConfig({ failureMode: "deny" }),
