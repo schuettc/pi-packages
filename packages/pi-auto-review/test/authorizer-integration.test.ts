@@ -2576,6 +2576,90 @@ test("real permission-system authorizer chain integration", async (t) => {
     }
   });
 
+  await t.test("/auto-review-model works mid-turn; an in-flight review keeps the reviewer it started with", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let gated = true;
+    const instance = harness(async () => {
+      if (gated) { gated = false; await gate; }
+      return allow;
+    }, {
+      config: {
+        ...config(),
+        reviewer: "terra",
+        reviewers: {
+          sonnet: { model: "claude-bridge/claude-sonnet-4-6", reasoning: "high" },
+          terra: { model: "openai-codex/gpt-5.6-terra", reasoning: "off" },
+        },
+        model: "openai-codex/gpt-5.6-terra",
+        reasoning: "off",
+      },
+      interactiveTui: true,
+    });
+    const notices: string[] = [];
+    try {
+      // Start a review on terra and hold it inside the model call.
+      const inFlight = instance.authorize("network");
+      while (instance.modelContexts.length === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      // Switch reviewers while the agent is busy (not idle).
+      const command = instance.commands.get("auto-review-model");
+      assert.ok(command);
+      await command.handler("", {
+        ...instance.context,
+        hasUI: true,
+        mode: "tui",
+        isIdle: () => false,
+        ui: {
+          async select(_title: string, choices: string[]) {
+            return choices.find((choice) => choice.startsWith("sonnet "));
+          },
+          notify(message: string) {
+            notices.push(message);
+          },
+        },
+      });
+      assert.ok(!notices.some((n) => /requires the agent to be idle/.test(n)), notices.join(" | "));
+      assert.match(notices.at(-1) ?? "", /sonnet.*next review/i);
+      release();
+      await inFlight;
+      // The in-flight review is attributed to the reviewer that decided it.
+      const firstDecision = instance.reviews.filter((r) => r.event === "pi_auto_review_decision").at(-1);
+      assert.equal(firstDecision?.data.model, "openai-codex/gpt-5.6-terra");
+      assert.deepEqual(instance.modelLookups.at(-1), { provider: "openai-codex", modelId: "gpt-5.6-terra" });
+      // The next review uses the newly selected reviewer.
+      await instance.authorize("network");
+      assert.deepEqual(instance.modelLookups.at(-1), { provider: "claude-bridge", modelId: "claude-sonnet-4-6" });
+      const secondDecision = instance.reviews.filter((r) => r.event === "pi_auto_review_decision").at(-1);
+      assert.equal(secondDecision?.data.model, "claude-bridge/claude-sonnet-4-6");
+    } finally {
+      release();
+      instance.dispose();
+    }
+  });
+
+  await t.test("/auto-review-approve and /auto-review-break-glass still require the agent to be idle", async () => {
+    const instance = harness(deny, { interactiveTui: true });
+    try {
+      for (const name of ["auto-review-approve", "auto-review-break-glass"]) {
+        const notices: string[] = [];
+        const command = instance.commands.get(name);
+        assert.ok(command, name);
+        await command.handler("", {
+          ...instance.context,
+          hasUI: true,
+          mode: "tui",
+          isIdle: () => false,
+          ui: { notify(message: string) { notices.push(message); } },
+        });
+        assert.match(notices.at(-1) ?? "", /requires the agent to be idle/, name);
+      }
+    } finally {
+      instance.dispose();
+    }
+  });
+
   await t.test("/auto-review-approve selects one non-critical denial and injects trusted retry evidence", async () => {
     const instance = harness(deny);
     const notices: string[] = [];

@@ -303,14 +303,19 @@ export function createPiAutoReviewExtension(
     new BoundaryApprovalBroker({
       reviewer: async (request, reviewerContext) => {
         if (!context) throw new Error("review context is unavailable");
+        // Snapshot the reviewer config for this review. /auto-review-model may
+        // switch reviewers mid-turn; an in-flight review keeps the reviewer it
+        // started with (decision, failureMode, and telemetry all agree), and the
+        // switch takes effect from the next review.
+        const reviewConfig = config;
         // Branch on the active reviewer profile's engine. A jev profile runs
         // the System One engine; every other profile keeps the model
         // complete() path. Both produce a ReviewResult that flows through the
         // identical success and fail-closed lines below. Resolved outside the
         // try so the telemetry `engine` tag is correct on the failure path too.
         const activeProfile =
-          config.reviewer !== undefined
-            ? config.reviewers?.[config.reviewer]
+          reviewConfig.reviewer !== undefined
+            ? reviewConfig.reviewers?.[reviewConfig.reviewer]
             : undefined;
         const engine: "model" | "jev" =
           activeProfile?.engine === "jev" ? "jev" : "model";
@@ -322,7 +327,7 @@ export function createPiAutoReviewExtension(
             const dispatchStartedAt = Date.now();
             result = await reviewWithJev(
               context,
-              config,
+              reviewConfig,
               request,
               reviewerContext,
               activeProfile,
@@ -334,7 +339,7 @@ export function createPiAutoReviewExtension(
           } else {
             result = await complete(
               context,
-              config,
+              reviewConfig,
               request,
               reviewerContext,
               resolveReviewerMeta,
@@ -347,7 +352,7 @@ export function createPiAutoReviewExtension(
           emitTelemetry(
             completeTelemetry(
               request,
-              config,
+              reviewConfig,
               result.summary,
               result.decision.outcome,
               undefined,
@@ -364,7 +369,7 @@ export function createPiAutoReviewExtension(
           if (request.source === "permission-system") {
             reviewResults.set(request.id, {
               decision: {
-                outcome: config.failureMode,
+                outcome: reviewConfig.failureMode,
                 risk_level: "high",
                 user_authorization: "unknown",
                 rationale: "Automatic review is unavailable.",
@@ -382,10 +387,10 @@ export function createPiAutoReviewExtension(
           emitTelemetry(
             completeTelemetry(
               request,
-              config,
+              reviewConfig,
               execution.summary,
-              config.failureMode,
-              config.failureMode,
+              reviewConfig.failureMode,
+              reviewConfig.failureMode,
               engine,
             ),
           );
@@ -465,13 +470,10 @@ export function createPiAutoReviewExtension(
         ctx.ui.notify("pi-auto-review is not active.", "error");
         return;
       }
-      if (!ctx.isIdle()) {
-        ctx.ui.notify(
-          "/auto-review-model requires the agent to be idle.",
-          "warning",
-        );
-        return;
-      }
+      // No idle requirement: switching reviewers only affects reviews that start
+      // after the switch (each review snapshots its config), and only the human
+      // can run this command. /auto-review-approve and /auto-review-break-glass
+      // keep their idle guards because they bind a one-shot grant to one action.
       const reviewers = config.reviewers ?? {};
       const names = Object.keys(reviewers);
       if (names.length === 0) {
@@ -504,7 +506,7 @@ export function createPiAutoReviewExtension(
       const [reviewer] = selectedProfile;
       config = selectReviewerProfile(config as Config, reviewer);
       ctx.ui.notify(
-        `Using reviewer ${reviewer} (${config.model}) for the current session.`,
+        `Using reviewer ${reviewer} (${config.model}) for the current session, starting with the next review.`,
         "info",
       );
     },
@@ -834,13 +836,16 @@ export function createPiAutoReviewExtension(
             return { kind: "deny", reason };
           }
 
+          // Same snapshot as the reviewer callback: this review is labelled with
+          // the reviewer that decided it even if /auto-review-model runs meanwhile.
+          const reviewConfig = config;
           const request = boundaryRequest(context, details, query);
           const target = reviewTargetFromRequest(request);
           const reviewContext = context;
           const widgetGeneration = reviewWidget.begin(request.id, reviewContext, {
             surface,
             target,
-            model: config.model,
+            model: reviewConfig.model,
           });
           const decision = await broker.review(request, {
             sessionId: reviewContext.sessionManager.getSessionId(),
@@ -871,7 +876,7 @@ export function createPiAutoReviewExtension(
           } else {
             userOutcome = "deny";
           }
-          const reviewMeta = userReviewMetaFromResult(result, config.model);
+          const reviewMeta = userReviewMetaFromResult(result, reviewConfig.model);
           const noticeInput = {
             outcome: result?.unavailable ? "unavailable" as const : userOutcome,
             surface,
@@ -896,7 +901,7 @@ export function createPiAutoReviewExtension(
             requestId: request.id,
             toolCallId: request.toolCallId,
             surface,
-            model: config.model,
+            model: reviewConfig.model,
             reviewerModel: reviewMeta.model,
             outcome: allowCapped ? "defer" : decision.kind,
             reviewerOutcome: decision.review.outcome,
