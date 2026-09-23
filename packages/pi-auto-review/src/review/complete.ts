@@ -338,6 +338,7 @@ export function denialLabel(
     denial.request.resolvedPath ??
     denial.request.path ??
     denial.request.destination ??
+    denial.request.fullCommand ??
     denial.request.command ??
     denial.request.toolName ??
     denial.request.operation;
