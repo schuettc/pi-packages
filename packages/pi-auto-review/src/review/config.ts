@@ -91,16 +91,51 @@ export function validateConfig(value: unknown, source: string): Config {
     }
     const profile = value as unknown as Record<string, unknown>;
     const extra = Object.keys(profile).filter(
-      (key) => key !== "model" && key !== "reasoning",
+      (key) =>
+        key !== "model" &&
+        key !== "reasoning" &&
+        key !== "engine" &&
+        key !== "timeoutMs",
     );
-    if (extra.length > 0 || !validModel(profile.model) ||
-        !validReasoning(profile.reasoning)) {
+    if (extra.length > 0) {
       throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
     }
-    reviewers[name] = Object.freeze({
-      model: profile.model,
-      reasoning: profile.reasoning,
-    });
+    if (profile.engine === "jev") {
+      if (typeof profile.model !== "string" || !profile.model.trim()) {
+        throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
+      }
+      if (
+        profile.timeoutMs !== undefined &&
+        (!Number.isInteger(profile.timeoutMs) ||
+          (profile.timeoutMs as number) < 1_000 ||
+          (profile.timeoutMs as number) > 60_000)
+      ) {
+        throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
+      }
+      reviewers[name] = Object.freeze({
+        model: profile.model,
+        reasoning: (profile.reasoning === undefined
+          ? "off"
+          : profile.reasoning) as ReasoningLevel,
+        engine: "jev" as const,
+        ...(profile.timeoutMs !== undefined
+          ? { timeoutMs: profile.timeoutMs as number }
+          : {}),
+      });
+    } else {
+      if (
+        profile.engine !== undefined ||
+        profile.timeoutMs !== undefined ||
+        !validModel(profile.model) ||
+        !validReasoning(profile.reasoning)
+      ) {
+        throw new Error(`${EXTENSION_NAME}: invalid reviewer profile ${name}`);
+      }
+      reviewers[name] = Object.freeze({
+        model: profile.model,
+        reasoning: profile.reasoning,
+      });
+    }
   }
   config.reviewers = Object.freeze(reviewers);
   if (config.reviewer !== undefined) {
