@@ -11,7 +11,8 @@ import {
   loadTrustedConfig,
   userConfigPath,
 } from "../src/index.ts";
-import { activeReviewConfig, DEFAULT_CONFIG, validateConfig } from "../src/review/config.ts";
+import { activeReviewConfig, DEFAULT_CONFIG, standingAuthorizationsFor, validateConfig } from "../src/review/config.ts";
+import { homedir } from "node:os";
 
 const TEST_TMP_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -179,6 +180,31 @@ test("user config can fully overlay package trusted settings", () => {
       }),
     );
   }
+
+  const standing = applyUserConfig(packageConfig, {
+    standingAuthorizations: [
+      { scope: "~/GitHub/bettor-help", rule: "merging nfl-dk PRs to dev after green CI is routine" },
+      { rule: "running project tests is routine" },
+    ],
+  });
+  assert.equal(standing.standingAuthorizations?.length, 2);
+  assert.equal(Object.isFrozen(standing.standingAuthorizations), true);
+  assert.deepEqual(
+    standingAuthorizationsFor(standing, join(homedir(), "GitHub/bettor-help/nfl-dk")),
+    ["merging nfl-dk PRs to dev after green CI is routine", "running project tests is routine"],
+  );
+  assert.deepEqual(
+    standingAuthorizationsFor(standing, join(homedir(), "GitHub/bettor-help-other")),
+    ["running project tests is routine"],
+  );
+  for (const bad of ["x", [{}], [{ rule: "" }], [{ rule: "x", scope: 3 }], [{ rule: "x", extra: 1 }], [{ rule: "r".repeat(1_001) }]]) {
+    assert.throws(() => applyUserConfig(packageConfig, { standingAuthorizations: bad }));
+  }
+  // A project (agent-writable) config can never grant standing authority.
+  assert.throws(
+    () => applyProjectConfig(packageConfig, { standingAuthorizations: [{ rule: "anything goes" }] }),
+    /cannot set: standingAuthorizations/,
+  );
 
   const prototypeNamed = applyUserConfig(
     packageConfig,
