@@ -49,6 +49,11 @@ export {
   denialLabel,
   modelDecisionToBoundaryReview,
 } from "./complete.ts";
+export {
+  reviewWithJev,
+  resolveJevClient,
+  type JevReviewDeps,
+} from "./jev-reviewer.ts";
 export type {
   BoundedSurface,
   Config,
