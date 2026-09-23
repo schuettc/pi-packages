@@ -315,24 +315,32 @@ export function createPiAutoReviewExtension(
         const engine: "model" | "jev" =
           activeProfile?.engine === "jev" ? "jev" : "model";
         try {
-          const result =
-            activeProfile?.engine === "jev"
-              ? await reviewWithJev(
-                  context,
-                  config,
-                  request,
-                  reviewerContext,
-                  activeProfile,
-                  { client: resolveJevClientDep(activeProfile) },
-                )
-              : await complete(
-                  context,
-                  config,
-                  request,
-                  reviewerContext,
-                  resolveReviewerMeta,
-                  emitTelemetry,
-                );
+          let result: Awaited<ReturnType<typeof complete>>;
+          if (activeProfile?.engine === "jev") {
+            // Recorded just before the client resolves so the Jev diagnostics
+            // can attribute time spent in client construction.
+            const dispatchStartedAt = Date.now();
+            result = await reviewWithJev(
+              context,
+              config,
+              request,
+              reviewerContext,
+              activeProfile,
+              {
+                client: resolveJevClientDep(activeProfile),
+                dispatchStartedAt,
+              },
+            );
+          } else {
+            result = await complete(
+              context,
+              config,
+              request,
+              reviewerContext,
+              resolveReviewerMeta,
+              emitTelemetry,
+            );
+          }
           if (request.source === "permission-system") {
             reviewResults.set(request.id, result);
           }

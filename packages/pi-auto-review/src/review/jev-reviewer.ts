@@ -1,3 +1,4 @@
+import * as diagnosticsChannel from "node:diagnostics_channel";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CredentialStore, JevClient, resolveTypeSafeDir } from "pi-typesafe-ai";
 import type {
@@ -18,6 +19,9 @@ import {
 import {
   ReviewExecutionError,
   type Config,
+  type JevDiagnostics,
+  type JevNetEvent,
+  type ReviewErrorClass,
   type ReviewExecutionSummary,
   type ReviewPreflight,
   type ReviewResult,
@@ -211,19 +215,95 @@ function jevSummary(
   preflight: ReviewPreflight,
   started: number,
   now: () => number,
+  diagnostics: JevDiagnostics,
+  errorCounts: ReviewExecutionSummary["errorCounts"] = {},
 ): ReviewExecutionSummary {
   return {
     attempts: [],
-    errorCounts: {},
+    errorCounts,
     durationMs: now() - started,
     transcript,
     preflight,
+    jevDiagnostics: diagnostics,
   };
 }
 
+function countOne(
+  errorClass: ReviewErrorClass,
+): ReviewExecutionSummary["errorCounts"] {
+  const counts: ReviewExecutionSummary["errorCounts"] = {};
+  if (errorClass !== "none") counts[errorClass] = 1;
+  return counts;
+}
+
+// Error text lands in telemetry and audit files, so strip anything that could
+// be a credential (bearer tokens, ts_ keys) and bound it to one short line.
+export function sanitizeErrorMessage(value: unknown): string {
+  const text = String(value instanceof Error ? value.message : value ?? "")
+    .replace(/Bearer\s+[^\s"',;]+/gi, "Bearer <redacted>")
+    .replace(/\bts_[A-Za-z0-9_\-]{6,}/g, "<redacted-key>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > 300 ? `${text.slice(0, 297)}...` : text;
+}
+
+// Classify by error name/status strings only, so this module never has to
+// import @typesafe-ai/sdk. SDK errors set `name` to their class name.
+export function classifyJevError(error: unknown): ReviewErrorClass {
+  const e = error as { name?: unknown; status?: unknown } | undefined;
+  const name = typeof e?.name === "string" ? e.name : "";
+  const status = typeof e?.status === "number" ? e.status : undefined;
+  if (name === "APITimeoutError" || name === "TimeoutError") return "timeout";
+  if (name === "APIUserAbortError" || name === "AbortError") return "abort";
+  if (name === "APIConnectionError") return "transient_connection";
+  if (name === "AuthenticationError" || name === "PermissionDeniedError" || name === "TypeSafeConfigError" || status === 401 || status === 403) return "authentication";
+  if (name === "RateLimitError" || status === 429) return "rate_limit";
+  if (name === "InternalServerError" || (status !== undefined && status >= 500)) return "transient_server";
+  return "jev_error";
+}
+
+export type { JevNetEvent };
+
+// Trace whether the Jev HTTP request ever left the process, using undici's
+// process-global diagnostics channels (no undici or SDK import). Records only
+// method, path, status code, error code/name and relative timings — never
+// headers or bodies, since the Authorization header carries the key. Handlers
+// swallow their own errors; callers must stop() in a finally.
+export function traceJevNetwork(host: string, now: () => number, started: number): { events: JevNetEvent[]; stop: () => void } {
+  const events: JevNetEvent[] = [];
+  const subs: Array<[string, (m: any) => void]> = [];
+  const push = (event: string, detail?: string) => { if (events.length < 50) events.push({ t: now() - started, event, ...(detail ? { detail } : {}) }); };
+  const matchReq = (r: any) => { try { return String(r?.origin ?? "").includes(host); } catch { return false; } };
+  const on = (name: string, fn: (m: any) => void) => {
+    const handler = (m: any) => { try { fn(m); } catch { /* diagnostics never throw */ } };
+    try { diagnosticsChannel.subscribe(name, handler); subs.push([name, handler]); } catch { /* unavailable */ }
+  };
+  on("undici:request:create", (m) => { if (matchReq(m?.request)) push("request:create", `${m.request.method} ${m.request.path}`); });
+  on("undici:client:beforeConnect", (m) => { if (String(m?.connectParams?.host ?? "").includes(host)) push("client:beforeConnect"); });
+  on("undici:client:connected", (m) => { if (String(m?.connectParams?.host ?? "").includes(host)) push("client:connected"); });
+  on("undici:client:connectError", (m) => { if (String(m?.connectParams?.host ?? "").includes(host)) push("client:connectError", String(m?.error?.code ?? m?.error?.name ?? "")); });
+  on("undici:client:sendHeaders", (m) => { if (matchReq(m?.request)) push("client:sendHeaders"); });
+  on("undici:request:bodySent", (m) => { if (matchReq(m?.request)) push("request:bodySent"); });
+  on("undici:request:headers", (m) => { if (matchReq(m?.request)) push("request:headers", String(m?.response?.statusCode ?? "")); });
+  on("undici:request:trailers", (m) => { if (matchReq(m?.request)) push("request:trailers"); });
+  on("undici:request:error", (m) => { if (matchReq(m?.request)) push("request:error", String(m?.error?.code ?? m?.error?.name ?? "")); });
+  return { events, stop: () => { for (const [name, h] of subs) { try { diagnosticsChannel.unsubscribe(name, h); } catch { /* ignore */ } } } };
+}
+
+// Snapshot the HTTP environment the SDK will inherit, so an extension that
+// replaced global fetch or the undici global dispatcher shows up in telemetry.
+export function snapshotHttpEnv(): { dispatcher: string; fetchNative: boolean; fetchName: string } {
+  let dispatcher = "unknown", fetchNative = false, fetchName = "unknown";
+  try { const d = (globalThis as any)[Symbol.for("undici.globalDispatcher.1")]; dispatcher = d ? String(d.constructor?.name ?? typeof d) : "none"; } catch { /* ignore */ }
+  try { const f = globalThis.fetch as any; fetchName = String(f?.name ?? typeof f); fetchNative = /\[native code\]/.test(Function.prototype.toString.call(f)); } catch { /* ignore */ }
+  return { dispatcher, fetchNative, fetchName };
+}
+
 export type JevReviewDeps = {
-  client: Pick<JevClient, "evaluate">;
+  client: Pick<JevClient, "evaluate"> & Partial<Pick<JevClient, "isConfigured">>;
   now?: () => number;
+  /** Set by the broker dispatch just before resolving the Jev client. */
+  dispatchStartedAt?: number;
 };
 
 // Construct a real Jev client from a reviewer profile. The credential store is
@@ -245,8 +325,10 @@ export function resolveJevClient(profile: {
 // transcript complete() builds for the model reviewer, hands it to the injected
 // Jev client, and maps the typed answers to a ModelDecision. It is fail-closed:
 // ANY error (client throw, malformed answers) is wrapped as a
-// ReviewExecutionError("jev_error", ...) so the caller applies failureMode
-// rather than ever returning an allow on a failure path.
+// ReviewExecutionError (classified by classifyJevError) so the caller applies
+// failureMode rather than ever returning an allow on a failure path. Every
+// summary carries jevDiagnostics: per-stage timings plus, on failure, the
+// sanitized error class/name/status/message.
 export async function reviewWithJev(
   ctx: ExtensionContext,
   config: Config,
@@ -257,8 +339,17 @@ export async function reviewWithJev(
 ): Promise<ReviewResult> {
   const now = deps.now ?? Date.now;
   const started = now();
+  const diagnostics: JevDiagnostics = {
+    at: new Date(started).toISOString(),
+    stages: {},
+    outcome: "ok",
+  };
+  if (deps.dispatchStartedAt !== undefined) {
+    diagnostics.stages.clientResolve = started - deps.dispatchStartedAt;
+  }
   // Build `transcript` identically to complete() so Jev sees the exact same
   // evidence Sonnet would (see review/complete.ts).
+  const transcriptStarted = now();
   const selectedTranscript = buildClassifierTranscript(
     ctx.sessionManager.buildContextEntries(),
     config,
@@ -274,6 +365,8 @@ export async function reviewWithJev(
     reviewerContext,
     config.maxReviewerInputTokens,
   );
+  diagnostics.stages.transcript = now() - transcriptStarted;
+  const preflightStarted = now();
   const sharedContext = sharedReviewContext(
     request,
     transcript,
@@ -286,30 +379,71 @@ export async function reviewWithJev(
     sharedContext,
     config.maxReviewerInputTokens,
   );
+  diagnostics.stages.preflight = now() - preflightStarted;
   // Mirror complete()'s input-budget fail-closed gate: refuse to review on
   // over-budget/truncated evidence unless a human explicitly authorized this
   // exact retry. A sizing failure must never fail open into an allow.
   if (transcript.failureCode && !reviewerContext?.userOverride) {
+    diagnostics.outcome = "error";
+    diagnostics.errorClass = transcript.failureCode;
     throw new ReviewExecutionError(
       transcript.failureCode,
-      jevSummary(transcript, preflight, started, now),
+      jevSummary(
+        transcript,
+        preflight,
+        started,
+        now,
+        diagnostics,
+        countOne(transcript.failureCode),
+      ),
     );
   }
+  // Start time of whichever stage is in flight, so the catch can record how
+  // long a stage ran before it threw.
+  let stage: "keyCheck" | "evaluate" | "map" | undefined;
+  let stageStarted = 0;
+  const begin = (next: typeof stage): void => {
+    stage = next;
+    stageStarted = now();
+  };
+  const end = (): void => {
+    if (stage) diagnostics.stages[stage] = now() - stageStarted;
+    stage = undefined;
+  };
   try {
     const state = buildJevState(request, transcript);
-    const { answers } = await deps.client.evaluate(state, JEV_QUESTIONS, {
-      model: profile.model,
-      timeoutMs: profile.timeoutMs,
-    });
+    if (deps.client.isConfigured) {
+      // Observational only: a missing key is left for evaluate() to report so
+      // the error class reflects the real failure.
+      begin("keyCheck");
+      diagnostics.keyConfigured = await deps.client.isConfigured();
+      end();
+    }
+    diagnostics.httpEnv = snapshotHttpEnv();
+    begin("evaluate");
+    const net = traceJevNetwork("api.typesafe.ai", now, started);
+    diagnostics.net = net.events;
+    let answers: Record<string, unknown> | undefined;
+    try {
+      ({ answers } = await deps.client.evaluate(state, JEV_QUESTIONS, {
+        model: profile.model,
+        timeoutMs: profile.timeoutMs,
+      }));
+    } finally {
+      net.stop();
+    }
+    end();
+    begin("map");
     const verdict = parseAnswers(answers);
     const decision = jevVerdictToDecision(verdict);
+    end();
     return {
       decision,
       attempts: 1,
       retryErrors: [],
       durationMs: now() - started,
       transcript,
-      summary: jevSummary(transcript, preflight, started, now),
+      summary: jevSummary(transcript, preflight, started, now, diagnostics),
       jev: {
         ...(verdict.risk !== undefined ? { risk: verdict.risk } : {}),
         ...(verdict.haz ? { haz: { ...verdict.haz } } : {}),
@@ -317,9 +451,17 @@ export async function reviewWithJev(
       },
     };
   } catch (error) {
+    end();
+    const cls = classifyJevError(error);
+    const e = error as { name?: unknown; status?: unknown } | undefined;
+    diagnostics.outcome = "error";
+    diagnostics.errorClass = cls;
+    if (typeof e?.name === "string") diagnostics.errorName = e.name;
+    if (typeof e?.status === "number") diagnostics.errorStatus = e.status;
+    diagnostics.errorMessage = sanitizeErrorMessage(error);
     const execError = new ReviewExecutionError(
-      "jev_error",
-      jevSummary(transcript, preflight, started, now),
+      cls,
+      jevSummary(transcript, preflight, started, now, diagnostics, countOne(cls)),
     );
     // Preserve the caught error for observability instead of discarding it.
     (execError as Error).cause = error;

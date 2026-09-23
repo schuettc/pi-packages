@@ -355,6 +355,9 @@ export function completeTelemetry(
     outcome,
     ...(failureMode ? { failureMode } : {}),
     ...(engine === "jev" && jev ? { jev } : {}),
+    ...(summary.jevDiagnostics
+      ? { jevDiagnostics: summary.jevDiagnostics }
+      : {}),
     attempts: summary.attempts.length,
     errorCounts: { ...summary.errorCounts },
     durationMs: summary.durationMs,

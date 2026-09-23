@@ -227,3 +227,169 @@ test("policyOutcome defers when there is no valid allow choice", () => {
   assert.equal(policyOutcome({}), "defer");
   assert.equal(policyOutcome({ risk: 0, choiceConfidence: 0.99 }), "defer");
 });
+
+// --- Task 7: Jev reviewer diagnostics ------------------------------------
+
+import * as diagnosticsChannel from "node:diagnostics_channel";
+import {
+  sanitizeErrorMessage,
+  classifyJevError,
+  snapshotHttpEnv,
+  traceJevNetwork,
+} from "../src/review/jev-reviewer.ts";
+import { completeTelemetry } from "../src/review/provider.ts";
+
+const allowAnswers = {
+  outcome: { type: "choice", choice: "allow", confidence: 0.95 },
+  risk_level: { type: "score", score: 0 },
+  hazard_credential_exfiltration: { type: "noul", noul: 0.02 },
+  hazard_destructive_wipe: { type: "noul", noul: 0.01 },
+  hazard_control_tampering: { type: "noul", noul: 0.02 },
+};
+
+async function captureJevFailure(
+  evaluate: () => Promise<never>,
+): Promise<ReviewExecutionError> {
+  const ctx = makeFakeCtx(["do a thing"]);
+  let caught: unknown;
+  await assert.rejects(
+    reviewWithJev(ctx, baseConfig(), jevRequest, undefined, { model: "jev-latest" }, {
+      client: { evaluate },
+    }).catch((error: unknown) => {
+      caught = error;
+      throw error;
+    }),
+  );
+  assert.ok(caught instanceof ReviewExecutionError);
+  return caught;
+}
+
+test("sanitizeErrorMessage redacts bearer tokens and ts_ keys, one line, <=300 chars", () => {
+  const out = sanitizeErrorMessage(new Error("boom\nBearer ts_abcdefghijk123 and ts_secretsecret99 " + "x".repeat(400)));
+  assert.ok(!out.includes("ts_abcdefghijk123") && !out.includes("ts_secretsecret99"));
+  assert.ok(out.includes("<redacted"));
+  assert.ok(!out.includes("\n"));
+  assert.ok(out.length <= 300);
+});
+
+test("classifyJevError maps SDK error names/statuses to review error classes", () => {
+  const err = (name: string, status?: number) => Object.assign(new Error(name), { name, ...(status ? { status } : {}) });
+  assert.equal(classifyJevError(err("APITimeoutError")), "timeout");
+  assert.equal(classifyJevError(err("APIConnectionError")), "transient_connection");
+  assert.equal(classifyJevError(err("AuthenticationError", 401)), "authentication");
+  assert.equal(classifyJevError(err("TypeSafeConfigError")), "authentication");
+  assert.equal(classifyJevError(err("RateLimitError", 429)), "rate_limit");
+  assert.equal(classifyJevError(err("APIError", 503)), "transient_server");
+  assert.equal(classifyJevError(new Error("weird")), "jev_error");
+});
+
+test("reviewWithJev success records stage timings + ok diagnostics", async () => {
+  const ctx = makeFakeCtx(["please read the file"]);
+  const client = {
+    evaluate: async () => ({ answers: allowAnswers, latencyMs: 7 }),
+    isConfigured: async () => true,
+  };
+  const result = await reviewWithJev(
+    ctx,
+    baseConfig(),
+    jevRequest,
+    undefined,
+    { model: "jev-latest" },
+    { client, dispatchStartedAt: Date.now() - 5 },
+  );
+  assert.equal(result.decision.outcome, "allow");
+  const diag = result.summary.jevDiagnostics;
+  assert.ok(diag);
+  assert.equal(diag.outcome, "ok");
+  assert.equal(typeof diag.stages.evaluate, "number");
+  assert.equal(typeof diag.stages.transcript, "number");
+  assert.equal(typeof diag.stages.preflight, "number");
+  assert.equal(typeof diag.stages.keyCheck, "number");
+  assert.equal(typeof diag.stages.map, "number");
+  assert.ok((diag.stages.clientResolve ?? -1) >= 0);
+  assert.equal(diag.keyConfigured, true);
+  assert.ok(!Number.isNaN(Date.parse(diag.at)));
+  assert.equal(diag.errorClass, undefined);
+  assert.deepEqual(result.summary.errorCounts, {});
+  assert.ok(Array.isArray(diag.net));
+
+  // completeTelemetry carries the diagnostics onto review_complete.
+  const event = completeTelemetry(
+    jevRequest,
+    baseConfig(),
+    result.summary,
+    result.decision.outcome,
+    undefined,
+    "jev",
+    result.jev,
+  );
+  assert.equal(event.type, "review_complete");
+  assert.deepEqual(
+    (event as { jevDiagnostics?: unknown }).jevDiagnostics,
+    diag,
+  );
+});
+
+test("reviewWithJev timeout is classified 'timeout', counted, and still fails closed", async () => {
+  const err = await captureJevFailure(async () => {
+    throw Object.assign(new Error("Request timed out."), { name: "APITimeoutError" });
+  });
+  assert.equal(err.errorClass, "timeout");
+  assert.equal(err.summary.errorCounts.timeout, 1);
+  const diag = err.summary.jevDiagnostics;
+  assert.ok(diag);
+  assert.equal(diag.outcome, "error");
+  assert.equal(diag.errorClass, "timeout");
+  assert.equal(diag.errorName, "APITimeoutError");
+  assert.equal(diag.errorMessage, "Request timed out.");
+  assert.equal(typeof diag.stages.evaluate, "number");
+  assert.equal(diag.stages.map, undefined);
+  assert.equal(diag.keyConfigured, undefined);
+  assert.ok((err as Error).cause instanceof Error);
+});
+
+test("reviewWithJev generic failure is classified jev_error with sanitized message", async () => {
+  const err = await captureJevFailure(async () => {
+    throw new Error("upstream said Bearer ts_leakyleakyleaky1");
+  });
+  assert.equal(err.errorClass, "jev_error");
+  assert.equal(err.summary.errorCounts.jev_error, 1);
+  const message = err.summary.jevDiagnostics?.errorMessage ?? "";
+  assert.ok(message.length > 0);
+  assert.ok(!message.includes("ts_leakyleakyleaky1"));
+  assert.ok(message.includes("<redacted"));
+});
+
+test("reviewWithJev records an HTTP status from a status-bearing error", async () => {
+  const err = await captureJevFailure(async () => {
+    throw Object.assign(new Error("Service Unavailable"), { name: "APIError", status: 503 });
+  });
+  assert.equal(err.errorClass, "transient_server");
+  assert.equal(err.summary.jevDiagnostics?.errorStatus, 503);
+});
+
+test("traceJevNetwork captures only the target host and stop() unsubscribes", () => {
+  const channel = diagnosticsChannel.channel("undici:request:create");
+  let clock = 100;
+  const trace = traceJevNetwork("api.typesafe.ai", () => clock, 90);
+  try {
+    channel.publish({ request: { origin: "https://api.typesafe.ai", method: "POST", path: "/v1/systemone", headers: ["authorization", "Bearer ts_secretsecret"] } });
+    channel.publish({ request: { origin: "https://example.com", method: "GET", path: "/" } });
+  } finally {
+    trace.stop();
+  }
+  assert.deepEqual(trace.events, [
+    { t: 10, event: "request:create", detail: "POST /v1/systemone" },
+  ]);
+  assert.ok(!JSON.stringify(trace.events).includes("ts_secretsecret"));
+  clock = 200;
+  channel.publish({ request: { origin: "https://api.typesafe.ai", method: "POST", path: "/v1/systemone" } });
+  assert.equal(trace.events.length, 1);
+});
+
+test("snapshotHttpEnv returns strings/boolean and never throws", () => {
+  const env = snapshotHttpEnv();
+  assert.equal(typeof env.dispatcher, "string");
+  assert.equal(typeof env.fetchName, "string");
+  assert.equal(typeof env.fetchNative, "boolean");
+});

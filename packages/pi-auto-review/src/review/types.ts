@@ -131,12 +131,37 @@ export type ReviewPreflight = {
   total: PreflightPart;
 };
 
+export type JevStage = "clientResolve" | "transcript" | "preflight" | "keyCheck" | "evaluate" | "map";
+
+/** One undici diagnostics_channel event, relative to the review start. */
+export type JevNetEvent = { t: number; event: string; detail?: string };
+
+export type JevDiagnostics = {
+  /** ISO timestamp when reviewWithJev began (correlate with the UI). */
+  at: string;
+  /** Milliseconds spent per stage (only stages that ran). */
+  stages: Partial<Record<JevStage, number>>;
+  /** Whether a key resolved (only when the client exposes isConfigured). */
+  keyConfigured?: boolean;
+  outcome: "ok" | "error";
+  errorClass?: ReviewErrorClass;
+  errorName?: string;
+  errorStatus?: number;
+  /** Sanitized: bearer tokens / ts_ keys redacted, single line, <= 300 chars. */
+  errorMessage?: string;
+  /** Network events seen during evaluate (method/path/status/error code only). */
+  net?: JevNetEvent[];
+  /** HTTP environment the SDK inherits (detects a replaced fetch/dispatcher). */
+  httpEnv?: { dispatcher: string; fetchNative: boolean; fetchName: string };
+};
+
 export type ReviewExecutionSummary = {
   attempts: ReviewAttemptObservation[];
   errorCounts: Partial<Record<Exclude<ReviewErrorClass, "none">, number>>;
   durationMs: number;
   transcript: TranscriptResult;
   preflight: ReviewPreflight;
+  jevDiagnostics?: JevDiagnostics;
 };
 
 export type ReviewerTelemetryEvent =
@@ -159,6 +184,7 @@ export type ReviewerTelemetryEvent =
         haz?: { credential?: number; wipe?: number; control?: number };
         conf?: number;
       };
+      jevDiagnostics?: JevDiagnostics;
       attempts: number;
       errorCounts: ReviewExecutionSummary["errorCounts"];
       durationMs: number;
