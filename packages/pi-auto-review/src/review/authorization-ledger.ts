@@ -71,6 +71,10 @@ export class AuthorizationLedger {
 
   record(entry: { text: string; inReplyTo?: string }): void {
     const atMs = this.now();
+    // pi re-sends queued messages after compaction as interactive input; a
+    // repeat of the latest entry must not push real authorizations out.
+    const latest = this.#entries.at(-1);
+    if (latest && latest.text === entry.text.trim().slice(0, MAX_TEXT_CHARACTERS)) return;
     this.#entries.push({
       atMs,
       at: new Date(atMs).toISOString(),
