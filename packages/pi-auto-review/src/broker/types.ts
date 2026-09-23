@@ -19,6 +19,11 @@ export type BoundaryRequest = {
   operation: string;
   cwd: string;
   command?: string;
+  /**
+   * The whole shell command when `command` is only the gated unit of it (for
+   * example `python3` out of a heredoc). Reviewers judge this.
+   */
+  fullCommand?: string;
   path?: string;
   resolvedPath?: string;
   destination?: string;

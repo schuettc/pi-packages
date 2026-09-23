@@ -76,6 +76,7 @@ import {
   boundaryRequest,
   boundedRequest,
   resolveReviewerMeta,
+  activeReviewConfig,
   selectReviewerProfile,
   sessionConfig,
   userReviewMetaFromResult,
@@ -306,8 +307,9 @@ export function createPiAutoReviewExtension(
         // Snapshot the reviewer config for this review. /auto-review-model may
         // switch reviewers mid-turn; an in-flight review keeps the reviewer it
         // started with (decision, failureMode, and telemetry all agree), and the
-        // switch takes effect from the next review.
-        const reviewConfig = config;
+        // switch takes effect from the next review. The active profile's input
+        // budget, when it sets one, applies to its own reviews.
+        const reviewConfig = activeReviewConfig(config);
         // Branch on the active reviewer profile's engine. A jev profile runs
         // the System One engine; every other profile keeps the model
         // complete() path. Both produce a ReviewResult that flows through the
@@ -926,6 +928,7 @@ export function createPiAutoReviewExtension(
               result?.transcript.relevantResultCharacters,
             transcriptTruncated: result?.transcript.truncated,
             command: request.command,
+            fullCommandCharacters: request.fullCommand?.length,
             path: request.path,
             resolvedPath: request.resolvedPath,
             destination: request.destination,
