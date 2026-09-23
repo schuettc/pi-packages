@@ -7,6 +7,7 @@ export {
   loadConfig,
   loadTrustedConfig,
   packageConfigPath,
+  activeReviewConfig,
   selectReviewerProfile,
   userConfigPath,
   validateConfig,

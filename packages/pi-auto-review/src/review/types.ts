@@ -21,6 +21,8 @@ export type ReviewerProfile = Readonly<{
   reasoning: ReasoningLevel;
   engine?: "jev";
   timeoutMs?: number;
+  /** Overrides the base maxReviewerInputTokens for reviews run by this profile. */
+  maxReviewerInputTokens?: number;
 }>;
 
 export type Config = {

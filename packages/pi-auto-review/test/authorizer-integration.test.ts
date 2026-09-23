@@ -599,6 +599,11 @@ test("request hashes bind forwarded requester sessions", () => {
   assert.notEqual(
     boundaryRequestHash(request),
     boundaryRequestHash({ ...request, requesterSessionId: "child-b" }),
+  );  // An approval for one heredoc must not cover a different script behind the
+  // same gated unit.
+  assert.notEqual(
+    boundaryRequestHash({ ...request, command: "python3", fullCommand: "python3 - <<'PY'\nprint(1)\nPY" }),
+    boundaryRequestHash({ ...request, command: "python3", fullCommand: "python3 - <<'PY'\nprint(2)\nPY" }),
   );
 });
 
@@ -845,6 +850,84 @@ test("real permission-system authorizer chain integration", async (t) => {
       assert.equal(audit?.command, "printf forwarded");
       assert.equal(audit?.agentName, "worker-a");
       assert.equal(audit?.requesterSessionId, "child-session-a");
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  await t.test("a heredoc's full command reaches the reviewer once, next to the gated unit", async () => {
+    const full = "python3 - <<'PY'\nimport shutil\nprint('shard totals')\nPY";
+    const instance = harness(allow, {
+      contextEntries: [
+        { message: { role: "user", content: "summarize the review log" } },
+        {
+          message: {
+            role: "assistant",
+            content: [{
+              type: "toolCall",
+              id: "call-current",
+              name: "bash",
+              arguments: { command: full },
+            }],
+          },
+        },
+      ],
+    });
+    try {
+      await instance.authorize("bash_escalated", {
+        requestId: "full-command",
+        toolCallId: "call-current",
+        toolName: "bash",
+        command: "python3",
+        payload: {
+          kind: "bash",
+          request: {},
+          evidence: [{ label: "full command", text: full, detail: null }],
+          annotations: [],
+        },
+      });
+      const envelope = JSON.parse(
+        reviewerTranscript(instance.modelContexts.at(-1)).userPrompt,
+      ) as Record<string, any>;
+      assert.equal(envelope.request.command, "python3");
+      assert.equal(envelope.request.fullCommand, full);
+      // The agent's own tool call carries the same script; it collapses to the
+      // exact-call linkage shell so the script is sent (and budgeted) once.
+      assert.equal(
+        envelope.evidence.toolCalls.items[0]?.content,
+        '{"id":"call-current","name":"bash","reason":"exact-tool-call"}',
+      );
+      const prompt = reviewerTranscript(instance.modelContexts.at(-1)).userPrompt;
+      assert.equal(prompt.match(/shard totals/g)?.length, 1);
+      assert.match(
+        reviewerTranscript(instance.modelContexts.at(-1)).systemPrompt,
+        /fullCommand/,
+      );
+      const decision = instance.reviews.filter((r) => r.event === "pi_auto_review_decision").at(-1);
+      assert.equal(decision?.data.command, "python3");
+      assert.equal(decision?.data.fullCommandCharacters, full.length);
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  await t.test("a full command that equals the gated command is not duplicated", async () => {
+    const instance = harness(allow);
+    try {
+      await instance.authorize("bash_escalated", {
+        requestId: "same-command",
+        payload: {
+          kind: "bash",
+          request: {},
+          evidence: [{ label: "full command", text: "touch /tmp/reviewed", detail: null }],
+          annotations: [],
+        },
+      });
+      const envelope = JSON.parse(
+        reviewerTranscript(instance.modelContexts.at(-1)).userPrompt,
+      ) as Record<string, any>;
+      assert.equal(envelope.request.command, "touch /tmp/reviewed");
+      assert.equal("fullCommand" in envelope.request, false);
     } finally {
       instance.dispose();
     }
@@ -3183,6 +3266,57 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     } finally {
       instance.dispose();
     }
+  });
+
+  await t.test("a jev profile's maxReviewerInputTokens governs its reviews", async () => {
+    const big = "python3 - <<'PY'\n" + "print('row')\n".repeat(3_500) + "PY";
+    const run = async (profileBudget: number | undefined) => {
+      const states: any[] = [];
+      const instance = harness(deny, {
+        config: jevConfig({
+          reviewers: {
+            jev: {
+              model: "jev-latest",
+              reasoning: "off",
+              engine: "jev",
+              ...(profileBudget ? { maxReviewerInputTokens: profileBudget } : {}),
+            },
+          } as Config["reviewers"],
+        }),
+        resolveJevClient: () => ({
+          async evaluate(state: unknown) {
+            states.push(state);
+            return { answers: allowAnswers, latencyMs: 1 };
+          },
+        }),
+      });
+      try {
+        const result = await instance.authorize("bash_escalated", {
+          requestId: "jev-budget",
+          command: "python3",
+          payload: {
+            kind: "bash",
+            request: {},
+            evidence: [{ label: "full command", text: big, detail: null }],
+            annotations: [],
+          },
+        });
+        return { approved: result.decision.approved, states };
+      } finally {
+        instance.dispose();
+      }
+    };
+    // ~45 KB of script overflows the 8,192 default: the review fails closed
+    // before Jev is called.
+    const base = await run(undefined);
+    assert.equal(base.approved, false);
+    assert.equal(base.states.length, 0);
+    // The jev profile's own budget admits it, and Jev sees the full command.
+    const raised = await run(32_768);
+    assert.equal(raised.approved, true);
+    assert.equal(raised.states.length, 1);
+    assert.equal(raised.states[0].request.command, "python3");
+    assert.equal(raised.states[0].request.fullCommand, big);
   });
 
   await t.test("a jev client throw fails closed to the configured failureMode", async () => {
