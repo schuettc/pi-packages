@@ -46,6 +46,9 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --experimental-transform-types --import ./test/register-external-ts.mjs --test test/*.test.ts"
   },
+  "dependencies": {
+    "pi-typesafe-ai": "^0.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "^0.86.0",
     "@earendil-works/pi-coding-agent": "^0.86.0",
