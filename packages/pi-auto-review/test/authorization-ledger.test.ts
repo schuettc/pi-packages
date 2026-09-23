@@ -47,3 +47,11 @@ test("lastAssistantText finds the latest assistant prose", () => {
   assert.equal(lastAssistantText(entries), "new plan: merge #444");
   assert.equal(lastAssistantText([]), undefined);
 });
+
+test("a repeated message (compaction replay) is recorded once", () => {
+  const ledger = new AuthorizationLedger();
+  ledger.record({ text: "yes, deploy it", inReplyTo: "Plan: deploy" });
+  ledger.record({ text: "yes, deploy it", inReplyTo: "Plan: deploy" });
+  ledger.record({ text: "and then publish" });
+  assert.deepEqual(ledger.entries().map((e) => e.text), ["yes, deploy it", "and then publish"]);
+});
