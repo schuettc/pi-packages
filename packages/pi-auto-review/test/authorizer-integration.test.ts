@@ -2879,6 +2879,68 @@ test("real permission-system authorizer chain integration", async (t) => {
     }
   });
 
+  await t.test("approval UIs show the heredoc being authorized, not just the gated unit", async () => {
+    const heredoc = (body: string) => ({
+      command: "python3",
+      payload: {
+        kind: "bash",
+        request: {},
+        evidence: [{ label: "full command", text: `python3 - <<'PY'\n${body}\nPY`, detail: null }],
+        annotations: [],
+      },
+    });
+    // Normal approve list labels the denial by its full command.
+    const denied = harness(deny);
+    try {
+      await denied.authorize("bash_escalated", heredoc("print('approve me')"));
+      let labels: string[] = [];
+      await denied.commands.get("auto-review-approve")!.handler("", {
+        ...denied.context,
+        hasUI: true,
+        mode: "tui",
+        isIdle: () => true,
+        ui: {
+          async select(_title: string, choices: string[]) { labels = choices; return undefined; },
+          notify() {},
+        },
+      });
+      assert.match(labels[0] ?? "", /python3 - <<'PY' print\('approve me'\)/);
+    } finally {
+      denied.dispose();
+    }
+    // Break-glass: the human, who is the last gate, sees the script itself.
+    const confirmFor = async (body: string) => {
+      const instance = harness(criticalDeny);
+      let label = "";
+      let message = "";
+      try {
+        await instance.authorize("bash_escalated", heredoc(body));
+        await instance.commands.get("auto-review-break-glass")!.handler("", {
+          ...instance.context,
+          hasUI: true,
+          mode: "tui",
+          isIdle: () => true,
+          ui: {
+            async select(_title: string, choices: string[]) { label = choices[0]!; return choices[0]; },
+            async confirm(_title: string, text: string) { message = text; return false; },
+            notify() {},
+          },
+        });
+      } finally {
+        instance.dispose();
+      }
+      return { label, message };
+    };
+    const short = await confirmFor("import shutil\nshutil.rmtree('/tmp/scratch')");
+    assert.match(short.label, /python3 - <<'PY'/);
+    assert.match(short.message, /Command\/target: python3/);
+    assert.match(short.message, /Full command \(\d+ characters\):\npython3 - <<'PY'\nimport shutil\nshutil\.rmtree\('\/tmp\/scratch'\)\nPY/);
+    assert.doesNotMatch(short.message, /Only the first/);
+    const long = await confirmFor("print('row')\n".repeat(600) + "print('tail')");
+    assert.match(long.message, /Only the first 4,000 of \d[\d,]* characters are shown/);
+    assert.doesNotMatch(long.message, /print\('tail'\)/);
+  });
+
   await t.test("critical deny requires break glass and exact retry bypasses the reviewer once", async () => {
     const instance = harness(criticalDeny);
     const notices: string[] = [];
