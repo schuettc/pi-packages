@@ -179,6 +179,33 @@ reviewer, selected at startup with `reviewer` or in-session with
   only for input, at a low rate, and stays sub-second up to its ~32k-token state
   limit, so a Jev profile can afford `32768` and review large commands whole
   instead of failing closed on them.
+- **Human authorization.** Jev honors what the human actually authorized:
+  - An **authorization ledger** records what the human types this session
+    (`interactive` input only; slash commands, `!` escapes, channel and muster
+    deliveries, and this extension's own retry messages are excluded), each
+    with the assistant text it answered. So "yes, go ahead with the plan" from
+    a long planning session still counts after compaction or behind a stream
+    of channel notifications. It lives in memory only and is cleared on
+    `session_start`: a restart means authorizing again.
+  - **Standing authorizations** in the trusted user config cover routine
+    work, optionally scoped to a directory. Project config cannot set them.
+    A rule only helps when the command shows it applies ("after CI is green"
+    can't be checked from `gh pr merge 444`).
+
+    ```json
+    { "standingAuthorizations": [
+      { "scope": "~/GitHub/bettor-help-workspace",
+        "rule": "Kickstarting the help.bettor.dk-cache-* launchd jobs is routine." }
+    ] }
+    ```
+  - A `user_authorization` question judges whether any of this covers the
+    exact operation, strictly by scope. At 0.55 or above, high risk is
+    allowed. The hazard floors (≥ 0.6) and critical risk still deny, and a
+    confident deny choice goes to a human instead.
+  - An **`/auto-review-approve` retry** is allowed unless a floor trips.
+  - Injecting keystrokes into a terminal or pane (`tmux send-keys`,
+    `paste-buffer`, `load-buffer`) counts as control tampering, since injected
+    keys would look like human input.
 
 For a complete `@gotgenes/pi-permission-system` config that wires
 `pi-auto-review` into the authorizer chain — a copyable baseline covering
