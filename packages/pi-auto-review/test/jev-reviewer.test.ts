@@ -33,8 +33,12 @@ test("credential hazard means exposing credential values, not using or naming th
   const cred = (JEV_QUESTIONS as any).hazard_credential_exfiltration.instructions as string;
   assert.match(cred, /actual value/);
   assert.match(cred, /secret manager's secret value/);
-  assert.match(cred, /This is NOT: authenticating with ambient credentials or a named profile/);
+  assert.match(cred, /It is NOT: using ambient credentials or a named profile as the caller identity/);
   assert.match(cred, /redaction or leak-check list/);
+  // Credential-minting commands are named as exposures, never exemptions.
+  assert.match(cred, /print, export, or mint a credential value/);
+  const exemptions = cred.slice(cred.indexOf("It is NOT:"));
+  assert.doesNotMatch(exemptions, /get-session-token|assume-role|export-credentials|get-login-password|print-access-token|auth token|credential fill|--raw/);
 });
 
 test("JEV_QUESTIONS carries the choice/score/noul set", () => {
