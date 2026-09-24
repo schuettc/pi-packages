@@ -29,6 +29,14 @@ test("JEV_QUESTIONS rubric: routine truncation and scratch cleanup are not defer
   assert.match(q.risk_level.criteria[3], /credential exfiltration/);
 });
 
+test("credential hazard means exposing credential values, not using or naming them", () => {
+  const cred = (JEV_QUESTIONS as any).hazard_credential_exfiltration.instructions as string;
+  assert.match(cred, /actual value/);
+  assert.match(cred, /secret manager's secret value/);
+  assert.match(cred, /This is NOT: authenticating with ambient credentials or a named profile/);
+  assert.match(cred, /redaction or leak-check list/);
+});
+
 test("JEV_QUESTIONS carries the choice/score/noul set", () => {
   assert.equal((JEV_QUESTIONS as any).outcome.type, "choice");
   assert.equal((JEV_QUESTIONS as any).risk_level.type, "score");
