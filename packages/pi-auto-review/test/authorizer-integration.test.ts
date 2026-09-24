@@ -3590,6 +3590,51 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     }
   });
 
+  await t.test("the decision log records each Jev signal, and why a review was unavailable", async () => {
+    const instance = harness(deny, {
+      config: jevConfig(),
+      resolveJevClient: () => ({
+        async evaluate() {
+          return {
+            answers: {
+              outcome: { choice: "allow", confidence: 0.8 },
+              risk_level: { score: 0.4 },
+              hazard_credential_exfiltration: { noul: 0.12 },
+              hazard_destructive_wipe: { noul: 0.03 },
+              hazard_control_tampering: { noul: 0.07 },
+              user_authorization: { noul: 0.2 },
+            },
+            latencyMs: 1,
+          };
+        },
+      }),
+    });
+    try {
+      await instance.authorize("network", { requestId: "jev-log" });
+      const data = instance.reviews.filter((r) => r.event === "pi_auto_review_decision").at(-1)?.data as any;
+      assert.deepEqual(data.jev, { risk: 0.4, haz: { credential: 0.12, wipe: 0.03, control: 0.07 }, conf: 0.8, auth: 0.2 });
+    } finally {
+      instance.dispose();
+    }
+    const failing = harness(allow, {
+      config: jevConfig({ failureMode: "deny" }),
+      resolveJevClient: () => ({
+        async evaluate() {
+          throw Object.assign(new Error("overloaded"), { name: "InternalServerError", status: 529 });
+        },
+      }),
+    });
+    try {
+      await failing.authorize("network", { requestId: "jev-log-fail" });
+      const data = failing.reviews.filter((r) => r.event === "pi_auto_review_decision").at(-1)?.data as any;
+      assert.equal(data.jevError.errorStatus, 529);
+      assert.equal(typeof data.jevError.errorClass, "string");
+      assert.equal("errorMessage" in data.jevError, false, "no free-text error in the decision log");
+    } finally {
+      failing.dispose();
+    }
+  });
+
   await t.test("a jev client throw fails closed to the configured failureMode", async () => {
     const instance = harness(allow, {
       config: jevConfig({ failureMode: "deny" }),
