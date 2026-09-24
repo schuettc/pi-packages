@@ -514,6 +514,9 @@ export function createPiAutoReviewExtension(
           kemptRules: config.standingAuthorizations ?? [],
           store: rulesStore,
           defaultScope: abbreviateHome(ctx.cwd),
+          ...(activeEngine(config) === "jev"
+            ? {}
+            : { inactiveReviewer: config.reviewer ?? config.model }),
           ...(suggestion ? { suggestion } : {}),
           session: ctx.sessionManager.getSessionId(),
           theme,
@@ -1165,6 +1168,11 @@ function describeForLedger(request: BoundaryRequest): string {
     request.toolName ??
     request.operation;
   return `${request.surface}: ${String(target).replace(/\s+/g, " ")}`;
+}
+
+function activeEngine(config: Readonly<Config>): "jev" | "model" {
+  const profile = config.reviewer !== undefined ? config.reviewers?.[config.reviewer] : undefined;
+  return profile?.engine === "jev" ? "jev" : "model";
 }
 
 function abbreviateHome(path: string): string {
