@@ -33,6 +33,10 @@ test("validateRule refuses empty, oversized and control-character rules", () => 
   assert.match(validateRule("  ", "") ?? "", /empty/);
   assert.match(validateRule("x".repeat(1_001), "") ?? "", /longer/);
   assert.match(validateRule("a\u001b[31m", "") ?? "", /control/);
+  assert.match(validateRule("fine", ".") ?? "", /must start with ~ or \//);
+  assert.match(validateRule("fine", "src/app") ?? "", /must start with ~ or \//);
+  assert.equal(validateRule("fine", "~/GitHub/x"), undefined);
+  assert.equal(validateRule("fine", "/Users/x/proj"), undefined);
 });
 
 test("rules from the panel join the kempt rules, scoped by cwd", () => {
@@ -52,4 +56,16 @@ test("rules.json is a protected write target (an agent cannot add its own rule)"
   const { rulesPath } = await import("../src/review/rules-store.ts");
   const denied = protectedWriteHardDeny({ id: "w", source: "permission-system", surface: "path_write", operation: "write", cwd: "/tmp", path: rulesPath() } as never);
   assert.equal(denied?.rule, "security-control-tampering");
+});
+
+test("a relative scope never matches (it would resolve against pi's own cwd)", () => {
+  assert.deepEqual(standingAuthorizationsFor({ ...DEFAULT_CONFIG }, process.cwd(), [{ scope: ".", rule: "dot" }, { scope: "src", rule: "src" }]), []);
+});
+
+test("load reparses only when the file changes", () => {
+  const s = store();
+  s.save([{ id: "a", rule: "one", addedAt: "" }]);
+  assert.deepEqual(s.load().rules.map((r) => r.rule), ["one"]);
+  s.save([{ id: "a", rule: "one" , addedAt: "" }, { id: "b", rule: "two", addedAt: "" }]);
+  assert.deepEqual(s.load().rules.map((r) => r.rule), ["one", "two"]);
 });
