@@ -332,6 +332,9 @@ function harness(
     ...(options.resolveJevClient
       ? { resolveJevClient: options.resolveJevClient as never }
       : {}),
+    ...((options as { rulesStore?: unknown }).rulesStore
+      ? { rulesStore: (options as { rulesStore?: unknown }).rulesStore as never }
+      : {}),
   })(pi as never);
   handlers.get("session_start")?.({}, context);
   if (options.emitReady !== false) {
@@ -3649,6 +3652,66 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
       assert.doesNotMatch(JSON.stringify(data), /sk-live-123/);
     } finally {
       wordy.dispose();
+    }
+  });
+
+  await t.test("rules added in the panel reach Jev; approving a deferred action suggests one", async () => {
+    const states: any[] = [];
+    let stored: any[] = [{ id: "r1", rule: "Panel rule.", addedAt: "" }];
+    const rulesStore = { load: () => ({ rules: stored }), save: (rules: any[]) => { stored = rules; } };
+    const instance = harness(deny, {
+      config: jevConfig(),
+      interactiveTui: true,
+      rulesStore,
+      resolveJevClient: () => ({
+        async evaluate(state: unknown) {
+          states.push(state);
+          return { answers: { ...allowAnswers, outcome: { choice: "defer", confidence: 0.9 }, risk_level: { score: 1.9 } }, latencyMs: 1 };
+        },
+      }),
+    } as never);
+    try {
+      await instance.authorize("bash_escalated", {
+        requestId: "perm-merge",
+        command: "gh",
+        payload: { kind: "bash", request: {}, evidence: [{ label: "full command", text: "gh pr merge 84 -R org/cli --merge", detail: null }], annotations: [] },
+      });
+      assert.deepEqual(states.at(-1).humanAuthorizations.standing, ["Panel rule."]);
+      instance.events.emit("permissions:decision", { requestId: "perm-merge", surface: "bash_escalated", value: "gh", result: "allow", resolution: "user_approved", origin: null, agentName: null, matchedPattern: null });
+      let panel: any;
+      let overlay: any;
+      await instance.commands.get("auto-review-rules")!.handler("", {
+        ...instance.context,
+        hasUI: true,
+        mode: "tui",
+        ui: {
+          ...instance.context.ui,
+          async custom(factory: any, options: any) {
+            overlay = options;
+            panel = factory({ requestRender() {} }, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, {}, () => {});
+            return undefined;
+          },
+        },
+      });
+      assert.equal(overlay.overlay, true);
+      const screen = panel.render(120).join("\n");
+      assert.match(screen, /Add suggested rule/);
+      assert.match(screen, /Panel rule\./);
+      panel.handleInput("\r");
+      assert.match(panel.render(120).join("\n").replace(/\x1b\[[0-9;]*m|\x1b_[^\x07]*\x07/g, ""), /gh pr merge 84 -R org\/cli --merge/);
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  await t.test("/auto-review-rules needs the interactive TUI", async () => {
+    const instance = harness(allow);
+    const notes: string[] = [];
+    try {
+      await instance.commands.get("auto-review-rules")!.handler("", { ...instance.context, hasUI: false, ui: { notify: (m: string) => { notes.push(m); } } });
+      assert.match(notes.at(-1) ?? "", /interactive/i);
+    } finally {
+      instance.dispose();
     }
   });
 
