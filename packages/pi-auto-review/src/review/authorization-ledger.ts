@@ -14,17 +14,27 @@
 // send-keys) would look interactive, which is why the reviewer treats keystroke
 // injection as control tampering.
 
+/** A human permission decision; absent for a typed message. */
+export type LedgerDecisionKind =
+  | "approved"
+  | "approved_for_session"
+  | "denied"
+  | "approved_retry"
+  | "break_glass";
+
 export type LedgerEntry = {
   at: string;
   text: string;
   /** Tail of the assistant text the human was answering; agent-authored. */
   inReplyTo?: string;
+  kind?: LedgerDecisionKind;
 };
 
 export type InputLike = { text: string; source: string };
 
 const MAX_TEXT_CHARACTERS = 1_500;
 const MAX_REPLY_CHARACTERS = 2_500;
+const MAX_DECISION_CHARACTERS = 600;
 // The line muster types into a pane to nudge an agent; not the human.
 const MUSTER_NUDGE_PREFIX = "📬 check your muster inbox";
 
@@ -59,14 +69,31 @@ export function lastAssistantText(entries: readonly unknown[]): string | undefin
 
 export class AuthorizationLedger {
   readonly #entries: Array<LedgerEntry & { atMs: number }> = [];
+  // Decisions are kept separately so a run of dialog clicks can never push
+  // the human's typed messages (the planning-session authorization) out.
+  readonly #decisions: Array<LedgerEntry & { atMs: number }> = [];
   private readonly now: () => number;
   private readonly maxEntries: number;
+  private readonly maxDecisions: number;
   private readonly maxAgeMs: number;
 
-  constructor(options: { now?: () => number; maxEntries?: number; maxAgeMs?: number } = {}) {
+  constructor(options: { now?: () => number; maxEntries?: number; maxDecisions?: number; maxAgeMs?: number } = {}) {
     this.now = options.now ?? Date.now;
     this.maxEntries = options.maxEntries ?? 8;
+    this.maxDecisions = options.maxDecisions ?? 8;
     this.maxAgeMs = options.maxAgeMs ?? 24 * 60 * 60 * 1_000;
+  }
+
+  /** Record a permission decision the human made (dialog click, approve, break-glass). */
+  recordDecision(entry: { kind: LedgerDecisionKind; text: string }): void {
+    const atMs = this.now();
+    this.#decisions.push({
+      atMs,
+      at: new Date(atMs).toISOString(),
+      kind: entry.kind,
+      text: entry.text.trim().slice(0, MAX_DECISION_CHARACTERS),
+    });
+    while (this.#decisions.length > this.maxDecisions) this.#decisions.shift();
   }
 
   record(entry: { text: string; inReplyTo?: string }): void {
@@ -88,12 +115,14 @@ export class AuthorizationLedger {
 
   entries(): LedgerEntry[] {
     const cutoff = this.now() - this.maxAgeMs;
-    return this.#entries
+    return [...this.#entries, ...this.#decisions]
       .filter((entry) => entry.atMs >= cutoff)
+      .sort((a, b) => a.atMs - b.atMs)
       .map(({ atMs: _atMs, ...entry }) => ({ ...entry }));
   }
 
   clear(): void {
     this.#entries.length = 0;
+    this.#decisions.length = 0;
   }
 }
