@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 
 import type {
@@ -99,6 +100,8 @@ import {
   shouldRecordInput,
   type LedgerDecisionKind,
 } from "./review/authorization-ledger.ts";
+import { RulesStore } from "./review/rules-store.ts";
+import { RULES_BOX_WIDTH, RulesPanel } from "./review/rules-panel.ts";
 import type { JevClient } from "pi-typesafe-ai";
 
 export type ResolveJevClient = (profile: {
@@ -130,6 +133,8 @@ export type PiAutoReviewExtensionOptions = {
   // reviewer:jev dispatch path can be exercised without real credentials or a
   // network call. Defaults to the real resolveJevClient.
   resolveJevClient?: ResolveJevClient;
+  /** Injection seam for the panel's rules file; tests supply an in-memory store. */
+  rulesStore?: Pick<RulesStore, "load" | "save">;
 };
 
 const POLICY_AUDIT_ENTRY_TYPE = "pi-auto-review-policy-audit";
@@ -246,6 +251,12 @@ export function createPiAutoReviewExtension(
   const reviewResults = new Map<string, ReviewResult>();
   // What the human typed this session (see review/authorization-ledger.ts).
   const authorizationLedger = new AuthorizationLedger();
+  // Standing rules the human added with /auto-review-rules (rules.json).
+  const rulesStore = options.rulesStore ?? new RulesStore();
+  // Requests the reviewer deferred to the human, so an approval of one can
+  // be offered as a draft rule ("make actions like this routine?").
+  const deferredToHuman = new Map<string, { cwd: string; text: string }>();
+  let ruleSuggestion: { rule: string; scope: string } | undefined;
   // Requests this extension reviewed this session, by permission request id.
   // A human decision on the bus is recorded in the ledger only when it names
   // one of these, so an event emitted by any other extension (the bus is
@@ -361,7 +372,11 @@ export function createPiAutoReviewExtension(
                 dispatchStartedAt,
                 authorizations: {
                   ledger: authorizationLedger.entries(),
-                  standing: standingAuthorizationsFor(reviewConfig, request.cwd),
+                  standing: standingAuthorizationsFor(
+                    reviewConfig,
+                    request.cwd,
+                    rulesStore.load().rules,
+                  ),
                 },
               },
             );
@@ -484,6 +499,32 @@ export function createPiAutoReviewExtension(
         }
       },
     });
+
+  pi.registerCommand("auto-review-rules", {
+    description: "Standing rules: routine work the reviewer treats as authorized",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/auto-review-rules requires the interactive pi TUI.", "warning");
+        return;
+      }
+      const suggestion = ruleSuggestion;
+      ruleSuggestion = undefined;
+      ctx.ui.setStatus("auto-review-rules", undefined);
+      await ctx.ui.custom<void>(
+        (tui, theme, _keybindings, done) => new RulesPanel({
+          kemptRules: config.standingAuthorizations ?? [],
+          store: rulesStore,
+          defaultScope: abbreviateHome(ctx.cwd),
+          ...(suggestion ? { suggestion } : {}),
+          session: ctx.sessionManager.getSessionId(),
+          theme,
+          requestRender: () => tui.requestRender(),
+          onClose: () => done(undefined),
+        }),
+        { overlay: true, overlayOptions: { anchor: "center", width: RULES_BOX_WIDTH } },
+      );
+    },
+  });
 
   pi.registerCommand("auto-review-model", {
     description: "Select a configured reviewer model for this session",
@@ -790,6 +831,8 @@ export function createPiAutoReviewExtension(
     telemetryCompleted.clear();
     authorizationLedger.clear();
     reviewedRequests.clear();
+    deferredToHuman.clear();
+    ruleSuggestion = undefined;
     uiAutoConfirmer.clear();
     try {
       config = sessionConfig(
@@ -839,6 +882,18 @@ export function createPiAutoReviewExtension(
         ? HUMAN_DECISIONS[decision.resolution]
         : undefined;
       if (typeof decision.requestId !== "string") return;
+      const deferred = deferredToHuman.get(decision.requestId);
+      deferredToHuman.delete(decision.requestId);
+      if (deferred && (kind === "approved" || kind === "approved_for_session")) {
+        ruleSuggestion = {
+          rule: `Routine: ${deferred.text}`.slice(0, 600),
+          scope: abbreviateHome(deferred.cwd),
+        };
+        context?.ui.setStatus(
+          "auto-review-rules",
+          "approved a deferred action · /auto-review-rules to make it routine",
+        );
+      }
       const described = reviewedRequests.get(decision.requestId);
       // One final decision per request: the first one (human or automatic)
       // uses the id up, so a later event for the same id is ignored.
@@ -926,6 +981,10 @@ export function createPiAutoReviewExtension(
             scopeKey: currentTurnScope(reviewContext),
             issueGrant: false,
           });
+          if (decision.kind === "defer") {
+            deferredToHuman.set(request.id, { cwd: request.cwd, text: describeForLedger(request) });
+            while (deferredToHuman.size > 64) deferredToHuman.delete(deferredToHuman.keys().next().value!);
+          }
           const result = reviewResults.get(request.id);
           reviewResults.delete(request.id);
           const allowCapped =
@@ -1104,6 +1163,11 @@ function describeForLedger(request: BoundaryRequest): string {
     request.toolName ??
     request.operation;
   return `${request.surface}: ${String(target).replace(/\s+/g, " ")}`;
+}
+
+function abbreviateHome(path: string): string {
+  const home = homedir();
+  return path === home ? "~" : path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
 const BREAK_GLASS_FULL_COMMAND_CHARACTERS = 4_000;
