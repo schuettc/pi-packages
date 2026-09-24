@@ -3715,6 +3715,26 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     }
   });
 
+  await t.test("a heredoc that writes the reviewer's rules is hard-denied before any review", async () => {
+    let evaluated = 0;
+    const instance = harness(allow, {
+      config: jevConfig(),
+      resolveJevClient: () => ({ async evaluate() { evaluated++; return { answers: allowAnswers, latencyMs: 1 }; } }),
+    });
+    try {
+      const full = "python3 - <<'PY'\nfrom pathlib import Path\nPath('/Users/x/.pi/agent/extensions/pi-auto-review/rules.json').write_text('{}')\nPY";
+      const result = await instance.authorize("bash_escalated", {
+        requestId: "tamper",
+        command: "python3",
+        payload: { kind: "bash", request: {}, evidence: [{ label: "full command", text: full, detail: null }], annotations: [] },
+      });
+      assert.equal(result.decision.approved, false);
+      assert.equal(evaluated, 0, "the reviewer is never asked");
+    } finally {
+      instance.dispose();
+    }
+  });
+
   await t.test("a jev client throw fails closed to the configured failureMode", async () => {
     const instance = harness(allow, {
       config: jevConfig({ failureMode: "deny" }),
