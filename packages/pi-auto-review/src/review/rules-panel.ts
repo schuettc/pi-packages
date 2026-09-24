@@ -232,7 +232,11 @@ export class RulesPanel implements Component {
     const { theme } = this.#opts;
     if (row.kind === "add") return [theme.fg("dim", "Add a standing rule: routine work Jev should treat as authorized.")];
     if (row.kind === "suggest") {
-      return [theme.fg("dim", `Draft: ${this.#opts.suggestion?.rule ?? ""}`), theme.fg("dim", "Enter to edit it into a general rule, then confirm.")];
+      return [
+        theme.fg("dim", "You approved (the agent's command, shown as written):"),
+        theme.fg("muted", truncateToWidth(this.#opts.suggestion?.rule ?? "", INNER, "…")),
+        theme.fg("dim", "Enter opens it as a draft: rewrite it as the general rule you mean, then confirm."),
+      ];
     }
     const lines = wrapTextWithAnsi(row.rule.rule, INNER).slice(0, DETAIL_LINES - 1).map((l) => theme.fg("text", l));
     const scope = row.rule.scope ? `in ${row.rule.scope}` : "everywhere";
