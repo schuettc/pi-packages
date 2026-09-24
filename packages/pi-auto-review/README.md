@@ -203,6 +203,15 @@ reviewer, selected at startup with `reviewer` or in-session with
     allowed. The hazard floors (≥ 0.6) and critical risk still deny, and a
     confident deny choice goes to a human instead.
   - An **`/auto-review-approve` retry** is allowed unless a floor trips.
+  - The credential hazard means *exposing* credential material (reading,
+    printing, copying or sending a secret's value or a credential file). Using
+    ambient credentials or a named profile to call an API, naming a secret or
+    its ARN, listing secret names, and code that mentions credential-like
+    strings (such as a redaction list) are ordinary work that the risk score
+    judges instead.
+  - The decision log records each Jev signal (`jev`: risk, the three hazards,
+    choice confidence, authorization) and, when a review is unavailable, the
+    error class and HTTP status (`jevError`).
   - Injecting keystrokes into a terminal or pane (`tmux send-keys`,
     `paste-buffer`, `load-buffer`) counts as control tampering, since injected
     keys would look like human input.

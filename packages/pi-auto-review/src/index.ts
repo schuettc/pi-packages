@@ -999,6 +999,22 @@ export function createPiAutoReviewExtension(
             transcriptRelevantResultCharacters:
               result?.transcript.relevantResultCharacters,
             transcriptTruncated: result?.transcript.truncated,
+            // Each Jev signal, so a floor or defer can be traced to its cause.
+            ...(result?.jev ? { jev: result.jev } : {}),
+            // Why a Jev review was unavailable: class and HTTP status only.
+            ...(result?.summary?.jevDiagnostics?.outcome === "error"
+              ? {
+                jevError: {
+                  errorClass: result.summary.jevDiagnostics.errorClass,
+                  ...(result.summary.jevDiagnostics.errorStatus !== undefined
+                    ? { errorStatus: result.summary.jevDiagnostics.errorStatus }
+                    : {}),
+                  ...(result.summary.jevDiagnostics.errorName !== undefined
+                    ? { errorName: result.summary.jevDiagnostics.errorName }
+                    : {}),
+                },
+              }
+              : {}),
             command: request.command,
             fullCommandCharacters: request.fullCommand?.length,
             path: request.path,
