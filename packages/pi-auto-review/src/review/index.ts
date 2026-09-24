@@ -27,6 +27,7 @@ export {
   assertTrustedInstallation,
   isWithin,
   protectedWriteHardDeny,
+  reviewerTamperingHardDeny,
 } from "./guards.ts";
 export {
   applyReviewerInputBudget,
