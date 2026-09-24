@@ -25,6 +25,8 @@ export interface RulesPanelOptions {
   store: Pick<RulesStore, "load" | "save">;
   /** Scope prefilled for a new rule (the current project, ~-abbreviated). */
   defaultScope: string;
+  /** Set when the active reviewer does not read standing rules (not a Jev profile). */
+  inactiveReviewer?: string;
   /** A draft from the human's most recent approval of a deferred action. */
   suggestion?: { rule: string; scope: string };
   session?: string;
@@ -107,7 +109,10 @@ export class RulesPanel implements Component {
     body.push("");
     body.push(this.#message
       ? this.#message.kind === "ok" ? theme.fg("success", `✓ ${this.#message.text}`) : theme.fg("error", `✗ ${this.#message.text}`)
-      : this.#problem ? theme.fg("warning", `! ${this.#problem}`) : "");
+      : this.#problem ? theme.fg("warning", `! ${this.#problem}`)
+      : this.#opts.inactiveReviewer
+        ? theme.fg("warning", `! Only the Jev reviewer uses these rules; current reviewer: ${this.#opts.inactiveReviewer}`)
+        : "");
     return this.#box(body, width);
   }
 
