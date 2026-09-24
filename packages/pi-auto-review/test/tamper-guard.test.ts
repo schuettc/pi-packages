@@ -9,6 +9,8 @@ test("bash writes to the reviewer's config, rules or code are hard-denied", () =
     `echo '{"rules":[]}' > ${D}/rules.json`,
     `echo x >> $HOME/.pi/agent/extensions/pi-auto-review/rules.json`,
     `cp /tmp/r.json ${D}/rules.json`,
+    `cd ${D}; cp /tmp/r.json rules.json`,
+    `D=${D}; echo '{}' > "$D/rules.json"`,
     `mv /tmp/c ${D}/config.json`,
     `jq '.reviewer="none"' ${D}/config.json > /tmp/c && mv /tmp/c ${D}/config.json`,
     `ln -sf /tmp/evil.json ${D}/rules.json`,
@@ -37,6 +39,12 @@ test("reading the reviewer's files, and unrelated writes, are not hard-denied", 
     `sqlite3 ${D}/policy-audit.sqlite "SELECT count(*) FROM decisions"`,
     `node -p "require('${D}/config.json').reviewer"`,
     `echo hi > /tmp/notes.txt`,
+    `cd ~/.pi/agent/npm/node_modules/@schuettc/pi-auto-review/src && echo "AUDIT=\${PI_AUTO_REVIEW_AUDIT_FILE:-<unset>}"`,
+    // Reads in the same command as unrelated writes (real false positives).
+    `AUDIT=$(mktemp /tmp/a.XXXX); echo "audit=$AUDIT"; grep model ${D}/config.json > $AUDIT.model`,
+    `echo "--- config:"; jq -r '.model' ${D}/config.json; echo x > /tmp/y`,
+    `tmp=$(mktemp -d); cp -R "$HOME/.pi/agent/npm/node_modules/@schuettc/pi-auto-review/." "$tmp/"; ls $tmp`,
+    `cd /tmp && cat > p.ts <<'EOF'\nimport { x } from "/Users/c/.pi/agent/npm/node_modules/@schuettc/pi-auto-review/src/review/jev-reviewer.ts";\nEOF`,
     `cp a.json b.json`,
   ]) {
     assert.equal(reviewerTamperingHardDeny(command), undefined, command);
