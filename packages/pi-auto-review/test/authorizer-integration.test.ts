@@ -3423,6 +3423,43 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     }
   });
 
+  await t.test("your permission-dialog decisions reach Jev's ledger; unmatched or automatic ones don't", async () => {
+    const states: any[] = [];
+    const instance = harness(deny, {
+      config: jevConfig(),
+      resolveJevClient: () => ({
+        async evaluate(state: unknown) {
+          states.push(state);
+          // Defer, so the ask goes to the human dialog.
+          return { answers: { ...allowAnswers, outcome: { choice: "defer", confidence: 0.9 } }, latencyMs: 1 };
+        },
+      }),
+    });
+    try {
+      const full = "gh pr merge 444 -R org/repo --merge";
+      await instance.authorize("bash_escalated", {
+        requestId: "perm-merge",
+        command: "gh",
+        payload: { kind: "bash", request: {}, evidence: [{ label: "full command", text: full, detail: null }], annotations: [] },
+      });
+      const decide = (requestId: string, resolution: string) =>
+        instance.events.emit("permissions:decision", { requestId, surface: "bash_escalated", value: "gh", result: resolution === "user_denied" ? "deny" : "allow", resolution, origin: null, agentName: null, matchedPattern: null });
+      decide("perm-merge", "user_approved");
+      decide("perm-forged", "user_approved"); // never reviewed here: ignored
+      decide("perm-merge", "authorizer_allowed"); // not a human decision: ignored
+      await instance.authorize("network", { requestId: "next" });
+      const ledger = states.at(-1).humanAuthorizations.ledger;
+      assert.equal(ledger.length, 1, JSON.stringify(ledger));
+      assert.equal(ledger[0].kind, "approved");
+      assert.match(ledger[0].text, /gh pr merge 444 -R org\/repo --merge/);
+      decide("perm-merge", "user_denied");
+      await instance.authorize("network", { requestId: "next-2" });
+      assert.equal(states.at(-1).humanAuthorizations.ledger.at(-1).kind, "denied");
+    } finally {
+      instance.dispose();
+    }
+  });
+
   await t.test("an /auto-review-approve retry is allowed by Jev unless a floor trips", async () => {
     const run = async (hazard: number) => {
       const states: any[] = [];
@@ -3471,6 +3508,7 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
     const ok = await run(0.1);
     assert.equal(ok.calls, 2, "the retry is still reviewed");
     assert.equal(ok.retryState.humanAuthorizations.approvedRetry.originalRequestId, "request-bash_escalated");
+    assert.equal(ok.retryState.humanAuthorizations.ledger.at(-1).kind, "approved_retry");
     assert.equal(ok.approved, true);
     // The credential hazard floor still denies an approved retry.
     const floored = await run(0.9);
