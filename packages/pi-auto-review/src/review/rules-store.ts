@@ -4,7 +4,7 @@
 // never overwrites them. That directory is a protected write target (see
 // review/guards.ts), and the panel saves only after a confirmation typed in
 // the TUI, so an agent cannot add a rule for itself.
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { userConfigPath } from "./config.ts";
 import type { StandingAuthorization } from "./types.ts";
@@ -19,6 +19,11 @@ export type LocalRule = StandingAuthorization & {
 
 export const MAX_RULE_CHARACTERS = 1_000;
 
+/** A scope must be absolute or ~-relative, never relative to pi's own cwd. */
+export function isAnchoredScope(scope: string): boolean {
+  return scope === "~" || scope.startsWith("~/") || scope.startsWith("/");
+}
+
 export function rulesPath(): string {
   return join(dirname(userConfigPath()), "rules.json");
 }
@@ -27,18 +32,36 @@ export function validateRule(rule: string, scope: string): string | undefined {
   if (!rule.trim()) return "the rule is empty";
   if (rule.length > MAX_RULE_CHARACTERS) return `the rule is longer than ${MAX_RULE_CHARACTERS} characters`;
   if (/[\u0000-\u001f]/.test(rule) || /[\u0000-\u001f]/.test(scope)) return "the rule or scope contains a control character";
+  if (scope.trim() && !isAnchoredScope(scope.trim())) return "the scope must start with ~ or / (an absolute path)";
   return undefined;
 }
 
 export class RulesStore {
   readonly path: string;
+  #cache: { stamp: string; result: { rules: LocalRule[]; problem?: string } } | undefined;
 
   constructor(options: { path?: string } = {}) {
     this.path = options.path ?? rulesPath();
   }
 
-  /** Never throws: a missing or unreadable file means no local rules (fail safe). */
+  /**
+   * Never throws: a missing or unreadable file means no local rules (fail
+   * safe). Reparses only when the file's mtime or size changes, since this
+   * runs on every review.
+   */
   load(): { rules: LocalRule[]; problem?: string } {
+    let stamp = "missing";
+    try {
+      const st = statSync(this.path);
+      stamp = `${st.mtimeMs}:${st.size}`;
+    } catch { /* missing: read() reports it */ }
+    if (this.#cache?.stamp === stamp) return { ...this.#cache.result, rules: [...this.#cache.result.rules] };
+    const result = this.#read();
+    this.#cache = { stamp, result };
+    return { ...result, rules: [...result.rules] };
+  }
+
+  #read(): { rules: LocalRule[]; problem?: string } {
     let raw: string;
     try {
       raw = readFileSync(this.path, "utf8");
@@ -76,5 +99,6 @@ export class RulesStore {
     writeFileSync(tmp, `${JSON.stringify({ version: 1, rules }, null, 2)}\n`, { mode: 0o600 });
     chmodSync(tmp, 0o600);
     renameSync(tmp, this.path);
+    this.#cache = undefined;
   }
 }

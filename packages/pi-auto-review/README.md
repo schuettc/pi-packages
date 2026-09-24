@@ -204,8 +204,8 @@ reviewer, selected at startup with `reviewer` or in-session with
     `~/.pi/agent/extensions/pi-auto-review/rules.json`, next to the
     kempt-managed config (which `kempt update` never touches), and apply from
     the next review. Kempt rules are listed read-only. A rule is saved only
-    after you confirm it with `y` in the panel, and agent writes to that
-    directory are hard-denied as tampering. When you approve an action the
+    after you confirm it with `y` in the panel. Scopes must be absolute or
+    start with `~`. When you approve an action the
     reviewer deferred, the status line offers to make it routine, and the
     panel opens with a draft rule for you to generalize.
   - A `user_authorization` question judges whether any of this covers the
@@ -222,6 +222,13 @@ reviewer, selected at startup with `reviewer` or in-session with
   - The decision log records each Jev signal (`jev`: risk, the three hazards,
     choice confidence, authorization) and, when a review is unavailable, the
     error class and HTTP status (`jevError`).
+  - **Reviewer files are a deterministic floor.** A shell command that
+    mentions `~/.pi/agent/extensions/pi-auto-review` or the installed package
+    and writes, moves, links or deletes files (redirects, `tee`, `cp`, `mv`,
+    `ln`, `rm`, `sed -i`, SQLite writes, or file-writing code in a heredoc)
+    is hard-denied before any reviewer runs, and no approval or break-glass
+    can pass it. Reading those files is fine. Change them through kempt or
+    `/auto-review-rules`.
   - Injecting keystrokes into a terminal or pane (`tmux send-keys`,
     `paste-buffer`, `load-buffer`) counts as control tampering, since injected
     keys would look like human input.

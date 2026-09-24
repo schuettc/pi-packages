@@ -74,6 +74,7 @@ import {
   modelDecisionToBoundaryReview,
   noModelSummary,
   protectedWriteHardDeny,
+  reviewerTamperingHardDeny,
   boundaryRequest,
   boundedRequest,
   resolveReviewerMeta,
@@ -444,6 +445,7 @@ export function createPiAutoReviewExtension(
       },
       hardDeny: (request) =>
         protectedWriteHardDeny(request) ??
+        reviewerTamperingHardDeny(request.fullCommand ?? request.command) ??
         deterministicHardDeny({
           surface: "bash_escalated",
           command: request.command,
@@ -886,7 +888,7 @@ export function createPiAutoReviewExtension(
       deferredToHuman.delete(decision.requestId);
       if (deferred && (kind === "approved" || kind === "approved_for_session")) {
         ruleSuggestion = {
-          rule: `Routine: ${deferred.text}`.slice(0, 600),
+          rule: deferred.text.slice(0, 600),
           scope: abbreviateHome(deferred.cwd),
         };
         context?.ui.setStatus(
@@ -983,7 +985,10 @@ export function createPiAutoReviewExtension(
           });
           if (decision.kind === "defer") {
             deferredToHuman.set(request.id, { cwd: request.cwd, text: describeForLedger(request) });
-            while (deferredToHuman.size > 64) deferredToHuman.delete(deferredToHuman.keys().next().value!);
+            for (const oldest of deferredToHuman.keys()) {
+              if (deferredToHuman.size <= 64) break;
+              deferredToHuman.delete(oldest);
+            }
           }
           const result = reviewResults.get(request.id);
           reviewResults.delete(request.id);

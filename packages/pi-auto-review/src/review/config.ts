@@ -335,6 +335,8 @@ function validStandingAuthorizations(
 // Whether a rule scoped to `scope` (~ allowed) covers a request made from cwd.
 export function scopeCovers(scope: string | undefined, cwd: string): boolean {
   if (scope === undefined || scope === "") return true;
+  // A relative scope would resolve against pi's own cwd, not the request's.
+  if (scope !== "~" && !scope.startsWith("~/") && !isAbsolute(scope)) return false;
   const expanded = scope === "~" ? homedir() : scope.startsWith("~/") ? join(homedir(), scope.slice(2)) : scope;
   const rel = relative(resolve(expanded), resolve(cwd));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
