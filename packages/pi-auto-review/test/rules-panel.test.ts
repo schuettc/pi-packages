@@ -95,3 +95,13 @@ test("the box keeps one height across modes; esc closes from the list", () => {
   p.press(ESC);
   assert.equal(p.closed(), true);
 });
+
+test("the panel warns when the active reviewer does not read rules", () => {
+  const panel = new RulesPanel({
+    kemptRules: [], store: { load: () => ({ rules: [] }), save: () => {} }, defaultScope: "~",
+    inactiveReviewer: "sonnet", theme, requestRender: () => {}, onClose: () => {},
+  });
+  assert.match(panel.render(120).join("\n"), /Only the Jev reviewer uses these rules; current reviewer: sonnet/);
+  const jev = open();
+  assert.doesNotMatch(jev.screen(), /Only the Jev reviewer/);
+});
