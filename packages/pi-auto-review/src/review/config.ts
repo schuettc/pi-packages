@@ -332,21 +332,23 @@ function validStandingAuthorizations(
   }));
 }
 
-// The standing authorization rules that apply to a request made from cwd.
+// Whether a rule scoped to `scope` (~ allowed) covers a request made from cwd.
+export function scopeCovers(scope: string | undefined, cwd: string): boolean {
+  if (scope === undefined || scope === "") return true;
+  const expanded = scope === "~" ? homedir() : scope.startsWith("~/") ? join(homedir(), scope.slice(2)) : scope;
+  const rel = relative(resolve(expanded), resolve(cwd));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+// The standing authorization rules that apply to a request made from cwd:
+// the kempt-managed ones in the user config, then any added in the panel.
 export function standingAuthorizationsFor(
   config: Readonly<Config>,
   cwd: string,
+  extra: readonly Readonly<StandingAuthorization>[] = [],
 ): string[] {
-  const expand = (path: string) =>
-    path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
-  const target = resolve(cwd);
-  return (config.standingAuthorizations ?? [])
-    .filter((entry) => {
-      if (entry.scope === undefined) return true;
-      const scope = resolve(expand(entry.scope));
-      const rel = relative(scope, target);
-      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-    })
+  return [...(config.standingAuthorizations ?? []), ...extra]
+    .filter((entry) => scopeCovers(entry.scope, cwd))
     .map((entry) => entry.rule);
 }
 
