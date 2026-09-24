@@ -3630,8 +3630,25 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
       assert.equal(data.jevError.errorStatus, 529);
       assert.equal(typeof data.jevError.errorClass, "string");
       assert.equal("errorMessage" in data.jevError, false, "no free-text error in the decision log");
+      assert.match(data.jevError.errorName, /^\w+$/, "errorName is a bare class token");
     } finally {
       failing.dispose();
+    }
+    const wordy = harness(allow, {
+      config: jevConfig({ failureMode: "deny" }),
+      resolveJevClient: () => ({
+        async evaluate() {
+          throw Object.assign(new Error("x"), { name: "HTTPError: token sk-live-123 rejected" });
+        },
+      }),
+    });
+    try {
+      await wordy.authorize("network", { requestId: "jev-log-wordy" });
+      const data = wordy.reviews.filter((r) => r.event === "pi_auto_review_decision").at(-1)?.data as any;
+      assert.equal("errorName" in data.jevError, false, "free-text names are dropped");
+      assert.doesNotMatch(JSON.stringify(data), /sk-live-123/);
+    } finally {
+      wordy.dispose();
     }
   });
 
