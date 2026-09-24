@@ -838,9 +838,11 @@ export function createPiAutoReviewExtension(
       const kind = typeof decision.resolution === "string"
         ? HUMAN_DECISIONS[decision.resolution]
         : undefined;
-      const described = typeof decision.requestId === "string"
-        ? reviewedRequests.get(decision.requestId)
-        : undefined;
+      if (typeof decision.requestId !== "string") return;
+      const described = reviewedRequests.get(decision.requestId);
+      // One final decision per request: the first one (human or automatic)
+      // uses the id up, so a later event for the same id is ignored.
+      reviewedRequests.delete(decision.requestId);
       if (kind && described) authorizationLedger.recordDecision({ kind, text: described });
     } catch {
       // Recording is best-effort; it must never affect the decision itself.
@@ -1070,7 +1072,9 @@ export function createPiAutoReviewExtension(
 }
 
 // What a ledger decision entry says about the operation: the whole command
-// (not just the gated unit), else the tool's arguments or the path.
+// (not just the gated unit), else the tool's arguments or the path. For
+// non-bash tools the arguments are agent-authored, but they are what the
+// human saw in the dialog when deciding.
 function describeForLedger(request: BoundaryRequest): string {
   const target =
     request.fullCommand ??
