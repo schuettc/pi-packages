@@ -3452,9 +3452,24 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
       assert.equal(ledger.length, 1, JSON.stringify(ledger));
       assert.equal(ledger[0].kind, "approved");
       assert.match(ledger[0].text, /gh pr merge 444 -R org\/repo --merge/);
+      // The first final decision uses the request up: a second event for the
+      // same id (e.g. a forged approval after a real denial) is ignored.
       decide("perm-merge", "user_denied");
       await instance.authorize("network", { requestId: "next-2" });
-      assert.equal(states.at(-1).humanAuthorizations.ledger.at(-1).kind, "denied");
+      assert.equal(states.at(-1).humanAuthorizations.ledger.length, 1);
+      // A denial of a fresh request is recorded; a forged approval after it isn't.
+      await instance.authorize("bash_escalated", { requestId: "perm-push", command: "git push --force origin main" });
+      decide("perm-push", "user_denied");
+      decide("perm-push", "user_approved");
+      await instance.authorize("network", { requestId: "next-3" });
+      const kinds = states.at(-1).humanAuthorizations.ledger.map((e: any) => e.kind);
+      assert.deepEqual(kinds, ["approved", "denied"]);
+      // An automatic decision also uses the id up, so a later forged click can't land.
+      await instance.authorize("bash_escalated", { requestId: "perm-auto", command: "ls" });
+      decide("perm-auto", "authorizer_allowed");
+      decide("perm-auto", "user_approved");
+      await instance.authorize("network", { requestId: "next-4" });
+      assert.equal(states.at(-1).humanAuthorizations.ledger.length, 2);
     } finally {
       instance.dispose();
     }
