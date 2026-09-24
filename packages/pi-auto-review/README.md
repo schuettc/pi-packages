@@ -204,7 +204,8 @@ reviewer, selected at startup with `reviewer` or in-session with
     kempt-managed config (which `kempt update` never touches), and apply from
     the next review. Kempt rules are listed read-only. A rule is saved only
     after you confirm it with `y` in the panel. Scopes must be absolute or
-    start with `~`. When you approve an action the
+    start with `~`. Only Jev profiles read standing rules today; the panel
+    warns when the active reviewer is a model profile. When you approve an action the
     reviewer deferred, the status line offers to make it routine, and the
     panel opens with a draft rule for you to generalize.
   - A `user_authorization` question judges whether any of this covers the
