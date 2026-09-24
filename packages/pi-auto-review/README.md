@@ -199,6 +199,15 @@ reviewer, selected at startup with `reviewer` or in-session with
         "rule": "Kickstarting the help.bettor.dk-cache-* launchd jobs is routine." }
     ] }
     ```
+  - **`/auto-review-rules`** opens a panel to add, edit and remove standing
+    rules from inside pi. They're saved to
+    `~/.pi/agent/extensions/pi-auto-review/rules.json`, next to the
+    kempt-managed config (which `kempt update` never touches), and apply from
+    the next review. Kempt rules are listed read-only. A rule is saved only
+    after you confirm it with `y` in the panel, and agent writes to that
+    directory are hard-denied as tampering. When you approve an action the
+    reviewer deferred, the status line offers to make it routine, and the
+    panel opens with a draft rule for you to generalize.
   - A `user_authorization` question judges whether any of this covers the
     exact operation, strictly by scope. At 0.55 or above, high risk is
     allowed. The hazard floors (≥ 0.6) and critical risk still deny, and a
