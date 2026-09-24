@@ -1009,7 +1009,8 @@ export function createPiAutoReviewExtension(
                   ...(result.summary.jevDiagnostics.errorStatus !== undefined
                     ? { errorStatus: result.summary.jevDiagnostics.errorStatus }
                     : {}),
-                  ...(result.summary.jevDiagnostics.errorName !== undefined
+                  // A bare class token only; never free text from an error.
+                  ...(/^\w{1,64}$/.test(result.summary.jevDiagnostics.errorName ?? "")
                     ? { errorName: result.summary.jevDiagnostics.errorName }
                     : {}),
                 },
