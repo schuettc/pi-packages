@@ -55,3 +55,26 @@ test("a repeated message (compaction replay) is recorded once", () => {
   ledger.record({ text: "and then publish" });
   assert.deepEqual(ledger.entries().map((e) => e.text), ["yes, deploy it", "and then publish"]);
 });
+
+test("human permission decisions are recorded alongside messages, with their own cap", () => {
+  let now = 1_000_000;
+  const ledger = new AuthorizationLedger({ now: () => now, maxEntries: 2, maxDecisions: 2 });
+  ledger.record({ text: "plan the merge" });
+  now += 1;
+  ledger.recordDecision({ kind: "approved", text: "bash: gh pr merge 444 -R org/repo --merge" });
+  now += 1;
+  ledger.record({ text: "and then publish" });
+  now += 1;
+  ledger.recordDecision({ kind: "denied", text: "bash: " + "x".repeat(2_000) });
+  const entries = ledger.entries();
+  // Merged in time order; decisions never push human messages out.
+  assert.deepEqual(entries.map((e) => e.kind ?? "message"), ["message", "approved", "message", "denied"]);
+  assert.equal(entries[3]!.text.length, 600);
+  assert.equal("inReplyTo" in entries[1]!, false);
+  now += 1;
+  ledger.recordDecision({ kind: "approved_for_session", text: "webfetch: docs" });
+  now += 1;
+  ledger.recordDecision({ kind: "break_glass", text: "bash: sed -i ..." });
+  assert.deepEqual(ledger.entries().filter((e) => e.kind).map((e) => e.kind), ["approved_for_session", "break_glass"]);
+  assert.equal(ledger.entries().filter((e) => !e.kind).length, 2);
+});

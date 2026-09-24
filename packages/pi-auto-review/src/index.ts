@@ -97,6 +97,7 @@ import {
   AuthorizationLedger,
   lastAssistantText,
   shouldRecordInput,
+  type LedgerDecisionKind,
 } from "./review/authorization-ledger.ts";
 import type { JevClient } from "pi-typesafe-ai";
 
@@ -245,6 +246,17 @@ export function createPiAutoReviewExtension(
   const reviewResults = new Map<string, ReviewResult>();
   // What the human typed this session (see review/authorization-ledger.ts).
   const authorizationLedger = new AuthorizationLedger();
+  // Requests this extension reviewed this session, by permission request id.
+  // A human decision on the bus is recorded in the ledger only when it names
+  // one of these, so an event emitted by any other extension (the bus is
+  // shared) cannot plant a fake approval.
+  const reviewedRequests = new Map<string, string>();
+  const MAX_REVIEWED_REQUESTS = 256;
+  const HUMAN_DECISIONS: Record<string, LedgerDecisionKind> = {
+    user_approved: "approved",
+    user_approved_for_session: "approved_for_session",
+    user_denied: "denied",
+  };
   const telemetryCompleted = new Set<string>();
   let broker: BoundaryApprovalBroker | undefined;
   // Reviewer metadata is re-resolved per review (see ReviewerMeta above),
@@ -588,6 +600,10 @@ export function createPiAutoReviewExtension(
         "Exact retry authorized once. The agent will retry it through the reviewer.",
         "info",
       );
+      authorizationLedger.recordDecision({
+        kind: "approved_retry",
+        text: describeForLedger(authorized.request),
+      });
       const target =
         authorized.request.resolvedPath ??
         authorized.request.path ??
@@ -725,6 +741,10 @@ export function createPiAutoReviewExtension(
         "Break-glass authorized once for the exact request; retry within 60 seconds.",
         "warning",
       );
+      authorizationLedger.recordDecision({
+        kind: "break_glass",
+        text: describeForLedger(authorized.request),
+      });
       const actionSummary = JSON.stringify({
         requestId: authorized.requestId,
         surface: authorized.request.surface,
@@ -766,6 +786,7 @@ export function createPiAutoReviewExtension(
     reviewResults.clear();
     telemetryCompleted.clear();
     authorizationLedger.clear();
+    reviewedRequests.clear();
     uiAutoConfirmer.clear();
     try {
       config = sessionConfig(
@@ -809,6 +830,18 @@ export function createPiAutoReviewExtension(
   pi.events.on("permissions:decision", (event) => {
     reviewWidget.permissionDecision(event);
     policyAudit.record(event as PermissionDecisionLike);
+    try {
+      const decision = event as { requestId?: unknown; resolution?: unknown };
+      const kind = typeof decision.resolution === "string"
+        ? HUMAN_DECISIONS[decision.resolution]
+        : undefined;
+      const described = typeof decision.requestId === "string"
+        ? reviewedRequests.get(decision.requestId)
+        : undefined;
+      if (kind && described) authorizationLedger.recordDecision({ kind, text: described });
+    } catch {
+      // Recording is best-effort; it must never affect the decision itself.
+    }
   });
 
   pi.events.on("permissions:ready", (event) => {
@@ -871,6 +904,11 @@ export function createPiAutoReviewExtension(
           // the reviewer that decided it even if /auto-review-model runs meanwhile.
           const reviewConfig = config;
           const request = boundaryRequest(context, details, query);
+          reviewedRequests.delete(request.id);
+          reviewedRequests.set(request.id, describeForLedger(request));
+          while (reviewedRequests.size > MAX_REVIEWED_REQUESTS) {
+            reviewedRequests.delete(reviewedRequests.keys().next().value!);
+          }
           const target = reviewTargetFromRequest(request);
           const reviewContext = context;
           const widgetGeneration = reviewWidget.begin(request.id, reviewContext, {
@@ -1026,6 +1064,22 @@ export function createPiAutoReviewExtension(
     await policyAudit.close();
   });
   };
+}
+
+// What a ledger decision entry says about the operation: the whole command
+// (not just the gated unit), else the tool's arguments or the path.
+function describeForLedger(request: BoundaryRequest): string {
+  const target =
+    request.fullCommand ??
+    request.command ??
+    request.toolInputPreview ??
+    request.resolvedPath ??
+    request.path ??
+    request.destination ??
+    request.skillName ??
+    request.toolName ??
+    request.operation;
+  return `${request.surface}: ${String(target).replace(/\s+/g, " ")}`;
 }
 
 const BREAK_GLASS_FULL_COMMAND_CHARACTERS = 4_000;
