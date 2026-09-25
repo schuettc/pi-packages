@@ -69,7 +69,16 @@ export function projectRootFor(cwd: string): string | undefined {
         const gitdir = readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
         const linked = gitdir ? resolve(dir, gitdir) : undefined;
         const marker = `${sep}worktrees${sep}`;
+        // Trust the link only if the main repository links back: git writes
+        // <common>/worktrees/<name>/gitdir pointing at this .git file. A
+        // planted .git file cannot borrow another repository's rules.
+        let linkedBack = false;
         if (linked && linked.includes(marker)) {
+          try {
+            linkedBack = realpathSync(readFileSync(join(linked, "gitdir"), "utf8").trim()) === realpathSync(dotGit);
+          } catch { linkedBack = false; }
+        }
+        if (linked && linkedBack) {
           const common = linked.slice(0, linked.lastIndexOf(marker));
           root = realpathSync(basename(common) === ".git" ? dirname(common) : common);
         } else {
@@ -155,7 +164,7 @@ export class RulesStore {
       if (entry.scope === "project" && typeof entry.project === "string") {
         scope = "project";
         project = entry.project;
-      } else if (typeof entry.scope === "string" && entry.scope !== "user" && entry.scope.trim()) {
+      } else if (typeof entry.scope === "string" && !["user", "~", "~/"].includes(entry.scope.trim()) && entry.scope.trim()) {
         scope = "project";
         project = expandHome(entry.scope.trim(), home);
       }

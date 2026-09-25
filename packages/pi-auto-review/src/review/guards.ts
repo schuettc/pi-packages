@@ -90,8 +90,11 @@ function lastArgument(segment: string): string {
 }
 
 /**
- * Deterministic floor for shell commands that would change the reviewer's
- * config, standing rules, audit data or installed code. protectedWriteHardDeny
+ * Deterministic floor for the common shell forms that would change the
+ * reviewer's config, standing rules, audit data or installed code. Best
+ * effort: it cannot parse every shell construct (bash -c strings, paths built
+ * from variables, globs, escapes, git/npm run inside the directory). Those
+ * still reach the reviewer, whose control-tampering hazard judges them. protectedWriteHardDeny
  * covers file-tool writes; this covers bash (callers pass the full command, so
  * heredoc bodies count). A shell write counts only when its own segment
  * targets a reviewer path: directly, through a variable assigned one, or after
