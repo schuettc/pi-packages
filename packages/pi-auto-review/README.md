@@ -230,12 +230,15 @@ reviewer, selected at startup with `reviewer` or in-session with
   - The decision log records each Jev signal (`jev`: risk, the three hazards,
     choice confidence, authorization) and, when a review is unavailable, the
     error class and HTTP status (`jevError`).
-  - **Reviewer files are a deterministic floor.** A shell command that
-    mentions `~/.pi/agent/extensions/pi-auto-review` or the installed package
-    and writes, moves, links or deletes files (redirects, `tee`, `cp`, `mv`,
-    `ln`, `rm`, `sed -i`, SQLite writes, or file-writing code in a heredoc)
-    is hard-denied before any reviewer runs, and no approval or break-glass
-    can pass it. Reading those files is fine. Change them through kempt or
+  - **A deterministic floor for common reviewer-file writes.** A shell
+    command whose write (redirect, `tee`, `cp`/`rsync` destination, `mv`, `ln`,
+    `rm`, `sed -i`, SQLite writes, or file-writing code in a heredoc) targets
+    `~/.pi/agent/extensions/pi-auto-review` or the installed package is
+    hard-denied before any reviewer runs. It's best effort: shell is too
+    flexible to parse completely (`bash -c` strings, paths assembled from
+    variables, globs, `git` or `npm` run inside the directory), and those
+    forms still go to the reviewer, whose control-tampering hazard judges
+    them. Reading these files is fine. Change them through kempt or
     `/auto-review-rules`.
   - Injecting keystrokes into a terminal or pane (`tmux send-keys`,
     `paste-buffer`, `load-buffer`) counts as control tampering, since injected
