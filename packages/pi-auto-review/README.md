@@ -198,16 +198,23 @@ reviewer, selected at startup with `reviewer` or in-session with
         "rule": "Kickstarting the help.bettor.dk-cache-* launchd jobs is routine." }
     ] }
     ```
-  - **`/auto-review-rules`** opens a panel to add, edit and remove standing
-    rules from inside pi. They're saved to
+  - **`/auto-review-rules`** opens a panel with three tabs:
+    - **User:** rules for every project on this machine. Kempt rules are
+      listed here read-only.
+    - **Project:** rules for one git repository, including its linked
+      worktrees (a worktree maps to its main checkout).
+    - **Recent:** actions the reviewer deferred that you approved this
+      session. Enter drafts a rule from one, which you rewrite as the general
+      rule you mean.
+
+    Add, edit, turn on or off (space) and remove rules there. Every change
+    asks `y/N`. Rules are saved to
     `~/.pi/agent/extensions/pi-auto-review/rules.json`, next to the
     kempt-managed config (which `kempt update` never touches), and apply from
-    the next review. Kempt rules are listed read-only. A rule is saved only
-    after you confirm it with `y` in the panel. Scopes must be absolute or
-    start with `~`. Only Jev profiles read standing rules today; the panel
-    warns when the active reviewer is a model profile. When you approve an action the
-    reviewer deferred, the status line offers to make it routine, and the
-    panel opens with a draft rule for you to generalize.
+    the next review. Project rules are stored there too, not in the
+    repository, because files in a repository are writable by the agent
+    working in it. Only Jev profiles read standing rules today; the panel
+    warns when the active reviewer is a model profile.
   - A `user_authorization` question judges whether any of this covers the
     exact operation, strictly by scope. At 0.55 or above, high risk is
     allowed. The hazard floors (≥ 0.6) and critical risk still deny, and a
