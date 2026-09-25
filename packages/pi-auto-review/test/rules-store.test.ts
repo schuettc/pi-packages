@@ -16,6 +16,7 @@ function repoWithWorktree() {
   const wt = join(base, "app-feat");
   mkdirSync(join(wt, "src"), { recursive: true });
   writeFileSync(join(wt, ".git"), `gitdir: ${join(main, ".git", "worktrees", "feat")}\n`);
+  writeFileSync(join(main, ".git", "worktrees", "feat", "gitdir"), `${join(wt, ".git")}\n`);
   const other = join(base, "other");
   mkdirSync(join(other, ".git"), { recursive: true });
   return { main, wt, other, outside: base };
@@ -42,9 +43,11 @@ test("a corrupt rules file fails safe; bad entries are skipped; old path scopes 
     { id: "c", rule: "old draft", scope: "~/GitHub/app" },
     { id: "d", rule: "bad project", scope: "project", project: "relative/path" },
     { id: "e", rule: "off", enabled: false },
+    { id: "f", rule: "home draft", scope: "~" },
   ] }));
   const rules = s.load().rules;
-  assert.deepEqual(rules.map((r) => r.id), ["b", "c", "e"]);
+  assert.deepEqual(rules.map((r) => r.id), ["b", "c", "e", "f"]);
+  assert.equal(rules[3]!.scope, "user", "a ~ scope becomes a User rule, not a project of all of ~");
   assert.deepEqual([rules[1]!.scope, rules[1]!.project], ["project", join(homedir(), "GitHub/app")]);
   assert.equal(rules[2]!.enabled, false);
 });
@@ -62,6 +65,12 @@ test("projectRootFor maps a linked worktree to its main checkout", () => {
   assert.equal(projectRootFor(join(wt, "src")), main);
   assert.equal(projectRootFor(other), other);
   assert.equal(projectRootFor(outside), undefined);
+  // A planted .git file pointing at another repo's worktree metadata, with no
+  // link back, is its own root, not the other project.
+  const planted = join(outside, "planted");
+  mkdirSync(planted, { recursive: true });
+  writeFileSync(join(planted, ".git"), `gitdir: ${join(main, ".git", "worktrees", "feat")}\n`);
+  assert.equal(projectRootFor(planted), planted);
 });
 
 test("user rules apply everywhere; project rules to the repo and its worktrees; disabled rules nowhere", () => {
