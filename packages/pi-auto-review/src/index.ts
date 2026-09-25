@@ -101,8 +101,8 @@ import {
   shouldRecordInput,
   type LedgerDecisionKind,
 } from "./review/authorization-ledger.ts";
-import { RulesStore } from "./review/rules-store.ts";
-import { RULES_BOX_WIDTH, RulesPanel } from "./review/rules-panel.ts";
+import { localRulesFor, projectRootFor, RulesStore } from "./review/rules-store.ts";
+import { RULES_BOX_WIDTH, RulesPanel, type RecentApproval } from "./review/rules-panel.ts";
 import type { JevClient } from "pi-typesafe-ai";
 
 export type ResolveJevClient = (profile: {
@@ -257,7 +257,9 @@ export function createPiAutoReviewExtension(
   // Requests the reviewer deferred to the human, so an approval of one can
   // be offered as a draft rule ("make actions like this routine?").
   const deferredToHuman = new Map<string, { cwd: string; text: string }>();
-  let ruleSuggestion: { rule: string; scope: string } | undefined;
+  // Newest first; the Recent tab of /auto-review-rules. Unseen until opened.
+  const recentApprovals: RecentApproval[] = [];
+  let recentUnseen = false;
   // Requests this extension reviewed this session, by permission request id.
   // A human decision on the bus is recorded in the ledger only when it names
   // one of these, so an event emitted by any other extension (the bus is
@@ -373,11 +375,10 @@ export function createPiAutoReviewExtension(
                 dispatchStartedAt,
                 authorizations: {
                   ledger: authorizationLedger.entries(),
-                  standing: standingAuthorizationsFor(
-                    reviewConfig,
-                    request.cwd,
-                    rulesStore.load().rules,
-                  ),
+                  standing: [
+                    ...standingAuthorizationsFor(reviewConfig, request.cwd),
+                    ...localRulesFor(rulesStore.load().rules, request.cwd),
+                  ],
                 },
               },
             );
@@ -509,18 +510,20 @@ export function createPiAutoReviewExtension(
         ctx.ui.notify("/auto-review-rules requires the interactive pi TUI.", "warning");
         return;
       }
-      const suggestion = ruleSuggestion;
-      ruleSuggestion = undefined;
+      const openOnRecent = recentUnseen;
+      recentUnseen = false;
       ctx.ui.setStatus("auto-review-rules", undefined);
+      const project = projectRootFor(ctx.cwd);
       await ctx.ui.custom<void>(
         (tui, theme, _keybindings, done) => new RulesPanel({
           kemptRules: config.standingAuthorizations ?? [],
           store: rulesStore,
-          defaultScope: abbreviateHome(ctx.cwd),
+          ...(project ? { project } : {}),
+          recent: [...recentApprovals],
+          ...(openOnRecent ? { initialTab: "recent" as const } : {}),
           ...(activeEngine(config) === "jev"
             ? {}
             : { inactiveReviewer: config.reviewer ?? config.model }),
-          ...(suggestion ? { suggestion } : {}),
           session: ctx.sessionManager.getSessionId(),
           theme,
           requestRender: () => tui.requestRender(),
@@ -837,7 +840,8 @@ export function createPiAutoReviewExtension(
     authorizationLedger.clear();
     reviewedRequests.clear();
     deferredToHuman.clear();
-    ruleSuggestion = undefined;
+    recentApprovals.length = 0;
+    recentUnseen = false;
     uiAutoConfirmer.clear();
     try {
       config = sessionConfig(
@@ -890,10 +894,14 @@ export function createPiAutoReviewExtension(
       const deferred = deferredToHuman.get(decision.requestId);
       deferredToHuman.delete(decision.requestId);
       if (deferred && (kind === "approved" || kind === "approved_for_session")) {
-        ruleSuggestion = {
-          rule: deferred.text.slice(0, 600),
-          scope: abbreviateHome(deferred.cwd),
-        };
+        const project = projectRootFor(deferred.cwd);
+        recentApprovals.unshift({
+          text: deferred.text.slice(0, 600),
+          ...(project ? { project } : {}),
+          at: new Date().toISOString(),
+        });
+        recentApprovals.length = Math.min(recentApprovals.length, 10);
+        recentUnseen = true;
         context?.ui.setStatus(
           "auto-review-rules",
           "approved a deferred action · /auto-review-rules to make it routine",
@@ -1176,11 +1184,6 @@ function describeForLedger(request: BoundaryRequest): string {
 function activeEngine(config: Readonly<Config>): "jev" | "model" {
   const profile = config.reviewer !== undefined ? config.reviewers?.[config.reviewer] : undefined;
   return profile?.engine === "jev" ? "jev" : "model";
-}
-
-function abbreviateHome(path: string): string {
-  const home = homedir();
-  return path === home ? "~" : path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
 const BREAK_GLASS_FULL_COMMAND_CHARACTERS = 4_000;
