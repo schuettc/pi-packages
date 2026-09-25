@@ -3657,7 +3657,10 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
 
   await t.test("rules added in the panel reach Jev; approving a deferred action suggests one", async () => {
     const states: any[] = [];
-    let stored: any[] = [{ id: "r1", rule: "Panel rule.", addedAt: "" }];
+    let stored: any[] = [
+      { id: "r1", rule: "Panel rule.", scope: "user", enabled: true, addedAt: "" },
+      { id: "r2", rule: "Disabled rule.", scope: "user", enabled: false, addedAt: "" },
+    ];
     const rulesStore = { load: () => ({ rules: stored }), save: (rules: any[]) => { stored = rules; } };
     const instance = harness(deny, {
       config: jevConfig(),
@@ -3695,8 +3698,8 @@ test("reviewer:jev dispatches to the Jev engine instead of the model path", asyn
       });
       assert.equal(overlay.overlay, true);
       const screen = panel.render(120).join("\n");
-      assert.match(screen, /Add suggested rule/);
-      assert.match(screen, /Panel rule\./);
+      assert.match(screen, /\[Recent 1\]/, "opens on Recent after an approval");
+      assert.match(screen, /gh pr merge 84 -R org\/cli --merge/);
       panel.handleInput("\r");
       assert.match(panel.render(120).join("\n").replace(/\x1b\[[0-9;]*m|\x1b_[^\x07]*\x07/g, ""), /gh pr merge 84 -R org\/cli --merge/);
     } finally {
