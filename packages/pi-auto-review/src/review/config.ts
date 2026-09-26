@@ -77,7 +77,7 @@ export function validateConfig(value: unknown, source: string): Config {
     const owners = config.ownedAccounts as unknown;
     if (
       !Array.isArray(owners) ||
-      owners.some((o) => typeof o !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(o))
+      owners.some((o) => typeof o !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(o))
     ) {
       throw new Error(`${EXTENSION_NAME}: ${source} ownedAccounts must be GitHub account names`);
     }
