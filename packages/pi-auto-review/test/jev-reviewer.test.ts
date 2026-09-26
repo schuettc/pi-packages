@@ -109,6 +109,7 @@ test("rubric: consequence, not action type — internal work is routine, public-
   assert.match(q.hazard_control_tampering.instructions, /permission, reviewer/);
   assert.match(q.hazard_control_tampering.instructions, /administrator policy from the command line/);
   assert.match(q.hazard_control_tampering.instructions, /It is NOT: ordinary changes to the developer's own infrastructure-as-code/);
+  assert.match(q.hazard_control_tampering.instructions, /whether the change is applied directly or through infrastructure-as-code/);
 });
 
 test("policyOutcome: routine risk with no hazard signal allows unless Jev confidently defers", () => {
@@ -125,6 +126,8 @@ test("policyOutcome: routine risk with no hazard signal allows unless Jev confid
   assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, risk: 1.0 }), "defer");
   assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, haz: measured }), "defer");
   assert.equal(policyOutcome({ risk: 0.2, haz: measured }), "defer");
+  // A defer with no confidence reported is treated as confident.
+  assert.equal(policyOutcome({ outcome: "defer", risk: 0.9, haz: measured }), "defer");
 });
 
 test("policyOutcome: a human objection defers even routine or authorized work; an approved retry still wins", () => {

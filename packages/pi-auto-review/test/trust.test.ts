@@ -208,7 +208,7 @@ test("user config can fully overlay package trusted settings", () => {
 
   const owned = applyUserConfig(packageConfig, { ownedAccounts: ["schuettc", "recreational-spreadsheeting", "schuettc"] });
   assert.deepEqual(owned.ownedAccounts, ["schuettc", "recreational-spreadsheeting"]);
-  for (const bad of ["schuettc", [""], ["has space"], ["-lead"], [7]]) {
+  for (const bad of ["schuettc", [""], ["has space"], ["-lead"], ["trail-"], [7]]) {
     assert.throws(() => applyUserConfig(packageConfig, { ownedAccounts: bad }));
   }
   assert.throws(() => applyProjectConfig(packageConfig, { ownedAccounts: ["attacker"] }), /cannot set: ownedAccounts/);
