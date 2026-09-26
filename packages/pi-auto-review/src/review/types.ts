@@ -47,6 +47,12 @@ export type Config = {
    * config only). A rule with a scope applies when the request cwd is inside it.
    */
   standingAuthorizations?: readonly Readonly<StandingAuthorization>[];
+  /**
+   * The developer's own GitHub accounts and orgs (trusted user config only).
+   * Work that targets these is routine for the Jev rubric; anything targeting
+   * another owner is public-facing.
+   */
+  ownedAccounts?: readonly string[];
 };
 
 export type StandingAuthorization = { scope?: string; rule: string };
@@ -193,6 +199,7 @@ export type ReviewerTelemetryEvent =
         haz?: { credential?: number; wipe?: number; control?: number };
         conf?: number;
         auth?: number;
+        objection?: number;
       };
       jevDiagnostics?: JevDiagnostics;
       attempts: number;

@@ -179,6 +179,38 @@ reviewer, selected at startup with `reviewer` or in-session with
   only for input, at a low rate, and stays sub-second up to its ~32k-token state
   limit, so a Jev profile can afford `32768` and review large commands whole
   instead of failing closed on them.
+- **Risk is judged by consequence, not by kind of action.** The rubric assumes
+  development in git repositories and infrastructure-as-code with a dev-to-prod
+  pipeline, where changes inside the developer's own accounts can be rolled
+  back. So pushing branches, opening and merging PRs, rerunning CI, deploying,
+  and creating or updating the developer's own cloud resources (including
+  "prod" and IAM changes made through IaC) are **routine**. **Consequential**
+  means public-facing or outside the developer's control:
+  - PRs, issues, comments or reviews on repositories owned by someone else
+    (the *target* repository decides, not the branch it comes from)
+  - posting publicly or messaging outside people, making something newly public
+  - force-pushing a default branch, deleting a whole repository, local
+    checkout or project folder
+  - irreversibly destroying data that can't be regenerated, and system-wide
+    machine configuration
+
+  Set the developer's own GitHub accounts in the trusted user config
+  (project config can't):
+
+  ```json
+  { "ownedAccounts": ["my-user", "my-org"] }
+  ```
+  Without it, every repository counts as someone else's.
+- **Routine work isn't held up by a wavering choice.** When the risk is
+  routine and every hazard is below 0.3, the review allows unless Jev
+  *confidently* (0.6 or more) defers, for example because a script's body isn't
+  shown. Missing or partial answers never take this path.
+- **A human "no" wins.** A `human_objection` question checks whether the human
+  told the agent not to do this, to stop or hold off, or denied the same
+  operation, with nothing later lifting it. At 0.5 or above the review defers,
+  even for routine or otherwise-authorized work. An `/auto-review-approve`
+  retry, which is newer, still goes through. The hard floors deny first either
+  way.
 - **Human authorization.** Jev honors what the human actually authorized:
   - An **authorization ledger** records what the human types this session
     (`interactive` input only; slash commands, `!` escapes, channel and muster

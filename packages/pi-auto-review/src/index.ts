@@ -373,6 +373,7 @@ export function createPiAutoReviewExtension(
               {
                 client: resolveJevClientDep(activeProfile),
                 dispatchStartedAt,
+                ownedAccounts: reviewConfig.ownedAccounts ?? [],
                 authorizations: {
                   ledger: authorizationLedger.entries(),
                   standing: [
