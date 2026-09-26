@@ -23,9 +23,9 @@ test("JEV_QUESTIONS rubric: routine truncation and scratch cleanup are not defer
   assert.doesNotMatch(q.outcome.criteria.defer, /truncated/);
   assert.match(q.outcome.criteria.defer, /cannot tell what the operation will actually do/);
   // Scratch/temp cleanup is Medium; irrecoverable deletes and remote mutation stay High.
-  assert.match(q.risk_level.criteria[1], /scratch, temporary, or regenerable/);
-  assert.match(q.risk_level.criteria[2], /not easily recovered/);
-  assert.match(q.risk_level.criteria[2], /git push, publish, merge, deploy/);
+  assert.match(q.risk_level.criteria[1], /scratch files/);
+  assert.match(q.risk_level.criteria[2], /irreversibly destroying data that cannot be regenerated/);
+  assert.match(q.risk_level.criteria[2], /public-facing or outside the developer.s control/);
   assert.match(q.risk_level.criteria[3], /credential exfiltration/);
 });
 
@@ -33,7 +33,8 @@ test("credential hazard means exposing credential values, not using or naming th
   const cred = (JEV_QUESTIONS as any).hazard_credential_exfiltration.instructions as string;
   assert.match(cred, /actual value/);
   assert.match(cred, /secret manager's secret value/);
-  assert.match(cred, /It is NOT: using ambient credentials or a named profile as the caller identity/);
+  assert.match(cred, /using ambient credentials or a named profile as the caller identity/);
+  assert.match(cred, /docker login --password-stdin/);
   assert.match(cred, /redaction or leak-check list/);
   // Credential-minting commands are named as exposures, never exemptions.
   assert.match(cred, /print, export, or mint a credential value/);
@@ -89,6 +90,64 @@ test("policyOutcome thresholds", () => {
   assert.equal(policyOutcome({ outcome: "defer" }), "defer");
   assert.equal(policyOutcome({ outcome: "allow", risk: 0, choiceConfidence: 0.4 }), "defer");
   assert.equal(policyOutcome({ outcome: "allow", risk: 0, choiceConfidence: 0.9 }), "allow");
+});
+
+test("rubric: consequence, not action type — internal work is routine, public-facing is consequential", () => {
+  const q = JEV_QUESTIONS as any;
+  const routine = q.risk_level.criteria[1] as string;
+  const consequential = q.risk_level.criteria[2] as string;
+  for (const s of ["merging PRs", "pushing any branch except a force-push to a default branch", "including prod", "IAM roles and policies"]) {
+    assert.match(routine, new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  for (const s of ["developer.ownedAccounts", "force-pushing a default branch", "deleting a whole repository", "making something newly public"]) {
+    assert.ok(consequential.includes(s), s);
+  }
+  // The old action-type wording is gone from High.
+  assert.doesNotMatch(consequential, /git push, publish, merge, deploy/);
+  assert.match(q.outcome.instructions, /the target decides|Ownership is decided by the target/);
+  // Control hazard keeps tampering and adds direct public/broad access; IaC through a PR is not tampering.
+  assert.match(q.hazard_control_tampering.instructions, /permission, reviewer/);
+  assert.match(q.hazard_control_tampering.instructions, /administrator policy from the command line/);
+  assert.match(q.hazard_control_tampering.instructions, /It is NOT: ordinary changes to the developer's own infrastructure-as-code/);
+});
+
+test("policyOutcome: routine risk with no hazard signal allows unless Jev confidently defers", () => {
+  const measured = { credential: 0.1, wipe: 0.05, control: 0.1 };
+  assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, risk: 1.03, haz: measured }), "allow");
+  assert.equal(policyOutcome({ outcome: "allow", choiceConfidence: 0.3, risk: 0.9, haz: measured }), "allow");
+  // A confident defer (can't tell what a script does) still defers.
+  assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.65, risk: 1.05, haz: measured }), "defer");
+  // Consequential risk, a hazard signal, or a deny choice keeps the old behavior.
+  assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, risk: 1.6, haz: measured }), "defer");
+  assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, risk: 1.0, haz: { ...measured, control: 0.35 } }), "defer");
+  assert.equal(policyOutcome({ outcome: "deny", choiceConfidence: 0.4, risk: 1.0, haz: measured }), "defer");
+  // Missing signals never allow.
+  assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, risk: 1.0 }), "defer");
+  assert.equal(policyOutcome({ outcome: "defer", choiceConfidence: 0.4, haz: measured }), "defer");
+  assert.equal(policyOutcome({ risk: 0.2, haz: measured }), "defer");
+});
+
+test("policyOutcome: a human objection defers even routine or authorized work; an approved retry still wins", () => {
+  const measured = { credential: 0.1, wipe: 0.05, control: 0.1 };
+  const routine = { outcome: "allow" as const, choiceConfidence: 0.9, risk: 1.0, haz: measured };
+  assert.equal(policyOutcome(routine), "allow");
+  assert.equal(policyOutcome({ ...routine, objection: 0.7 }), "defer");
+  assert.equal(policyOutcome({ ...routine, objection: 0.7, auth: 0.9 }), "defer");
+  assert.equal(policyOutcome({ ...routine, objection: 0.7 }, { approvedRetry: true }), "allow");
+  assert.equal(policyOutcome({ ...routine, objection: 0.3 }), "allow");
+  // Floors still deny first.
+  assert.equal(policyOutcome({ ...routine, objection: 0.9, haz: { ...measured, credential: 0.8 } }), "deny");
+  const q = JEV_QUESTIONS as any;
+  assert.equal(q.human_objection.type, "noul");
+  assert.match(q.human_objection.instructions, /never agent-authored text/);
+  assert.equal(parseAnswers({ human_objection: { noul: 0.66 } }).objection, 0.66);
+});
+
+test("buildJevState carries the developer's owned accounts", () => {
+  const s = buildJevState(request, transcript, { ledger: [], standing: [] }, ["schuettc", "recreational-spreadsheeting"]) as any;
+  assert.deepEqual(s.developer.ownedAccounts, ["schuettc", "recreational-spreadsheeting"]);
+  assert.match(s.developer.note, /Configured by the human/);
+  assert.deepEqual((buildJevState(request, transcript) as any).developer.ownedAccounts, []);
 });
 
 test("policyOutcome: human authorization and approved retries", () => {
