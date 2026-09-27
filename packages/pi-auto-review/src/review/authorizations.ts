@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Human authorizations: what the human actually typed in this conversation,
@@ -215,7 +215,11 @@ export class Authorizations {
       for (const name of readdirSync(this.dir)) {
         if (!name.endsWith(".json")) continue;
         const path = join(this.dir, name);
-        if (path !== this.#file && statSync(path).mtimeMs < cutoff) rmSync(path, { force: true });
+        try {
+          if (path !== this.#file && lstatSync(path).mtimeMs < cutoff) rmSync(path, { force: true });
+        } catch {
+          // One unreadable entry doesn't stop the rest.
+        }
       }
     } catch {
       // Pruning is housekeeping; never let it block a session.
