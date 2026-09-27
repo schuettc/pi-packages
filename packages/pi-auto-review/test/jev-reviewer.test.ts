@@ -147,7 +147,7 @@ test("policyOutcome: a human objection defers even routine or authorized work; a
 });
 
 test("buildJevState carries the developer's owned accounts", () => {
-  const s = buildJevState(request, transcript, { ledger: [], standing: [] }, ["schuettc", "recreational-spreadsheeting"]) as any;
+  const s = buildJevState(request, transcript, { entries: [], standing: [] }, ["schuettc", "recreational-spreadsheeting"]) as any;
   assert.deepEqual(s.developer.ownedAccounts, ["schuettc", "recreational-spreadsheeting"]);
   assert.match(s.developer.note, /Configured by the human/);
   assert.deepEqual((buildJevState(request, transcript) as any).developer.ownedAccounts, []);
@@ -196,18 +196,18 @@ test("JEV_QUESTIONS asks about human authorization and keystroke injection", () 
 
 test("buildJevState carries human authorizations outside untrusted evidence", () => {
   const s = buildJevState(request, transcript, {
-    ledger: [{ at: "2026-09-23T06:00:00.000Z", text: "yes, merge it", inReplyTo: "Plan: merge #444" }],
+    entries: [{ at: "2026-09-23T06:00:00.000Z", text: "yes, merge it", inReplyTo: "Plan: merge #444" }],
     standing: ["merging PRs to dev after green CI is routine"],
     approvedRetry: { originalRequestId: "perm-1" },
   }) as any;
-  assert.equal(s.humanAuthorizations.ledger[0].text, "yes, merge it");
+  assert.equal(s.humanAuthorizations.entries[0].text, "yes, merge it");
   assert.equal(s.humanAuthorizations.standing[0], "merging PRs to dev after green CI is routine");
   assert.equal(s.humanAuthorizations.approvedRetry.originalRequestId, "perm-1");
   assert.match(s.humanAuthorizations.note, /typed/);
   assert.equal("humanAuthorizations" in s.evidence, false);
   // Without any, the block is present but empty (Jev answers "not authorized").
   const bare = buildJevState(request, transcript) as any;
-  assert.deepEqual(bare.humanAuthorizations.ledger, []);
+  assert.deepEqual(bare.humanAuthorizations.entries, []);
   assert.deepEqual(bare.humanAuthorizations.standing, []);
 });
 

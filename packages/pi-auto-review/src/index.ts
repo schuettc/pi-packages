@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import type {
@@ -96,11 +97,11 @@ import {
 } from "./review/index.ts";
 import { ReviewExecutionError } from "./review/index.ts";
 import {
-  AuthorizationLedger,
+  Authorizations,
   lastAssistantText,
   shouldRecordInput,
-  type LedgerDecisionKind,
-} from "./review/authorization-ledger.ts";
+  type AuthorizationDecisionKind,
+} from "./review/authorizations.ts";
 import { localRulesFor, projectRootFor, RulesStore } from "./review/rules-store.ts";
 import { RULES_BOX_WIDTH, RulesPanel, type RecentApproval } from "./review/rules-panel.ts";
 import type { JevClient } from "pi-typesafe-ai";
@@ -136,6 +137,8 @@ export type PiAutoReviewExtensionOptions = {
   resolveJevClient?: ResolveJevClient;
   /** Injection seam for the panel's rules file; tests supply an in-memory store. */
   rulesStore?: Pick<RulesStore, "load" | "save">;
+  /** Where each conversation's authorizations are saved; tests use a temp dir. */
+  authorizationsDir?: string;
 };
 
 const POLICY_AUDIT_ENTRY_TYPE = "pi-auto-review-policy-audit";
@@ -250,8 +253,12 @@ export function createPiAutoReviewExtension(
   let shuttingDown = false;
   let disposeBrokerService: (() => void) | undefined;
   const reviewResults = new Map<string, ReviewResult>();
-  // What the human typed this session (see review/authorization-ledger.ts).
-  const authorizationLedger = new AuthorizationLedger();
+  // What the human typed and decided in this conversation, saved per session
+  // so a reload or resume keeps it (see review/authorizations.ts).
+  const authorizations = new Authorizations({
+    dir: options.authorizationsDir ??
+      join(dirname(userConfigPath()), "authorizations"),
+  });
   // Standing rules the human added with /auto-review-rules (rules.json).
   const rulesStore = options.rulesStore ?? new RulesStore();
   // Requests the reviewer deferred to the human, so an approval of one can
@@ -261,12 +268,12 @@ export function createPiAutoReviewExtension(
   const recentApprovals: RecentApproval[] = [];
   let recentUnseen = false;
   // Requests this extension reviewed this session, by permission request id.
-  // A human decision on the bus is recorded in the ledger only when it names
+  // A human decision on the bus is recorded in authorizations only when it names
   // one of these, so an event emitted by any other extension (the bus is
   // shared) cannot plant a fake approval.
   const reviewedRequests = new Map<string, string>();
   const MAX_REVIEWED_REQUESTS = 256;
-  const HUMAN_DECISIONS: Record<string, LedgerDecisionKind> = {
+  const HUMAN_DECISIONS: Record<string, AuthorizationDecisionKind> = {
     user_approved: "approved",
     user_approved_for_session: "approved_for_session",
     user_denied: "denied",
@@ -375,7 +382,7 @@ export function createPiAutoReviewExtension(
                 dispatchStartedAt,
                 ownedAccounts: reviewConfig.ownedAccounts ?? [],
                 authorizations: {
-                  ledger: authorizationLedger.entries(),
+                  entries: authorizations.entries(),
                   standing: [
                     ...standingAuthorizationsFor(reviewConfig, request.cwd),
                     ...localRulesFor(rulesStore.load().rules, request.cwd),
@@ -653,9 +660,9 @@ export function createPiAutoReviewExtension(
         "Exact retry authorized once. The agent will retry it through the reviewer.",
         "info",
       );
-      authorizationLedger.recordDecision({
+      authorizations.recordDecision({
         kind: "approved_retry",
-        text: describeForLedger(authorized.request),
+        text: describeOperation(authorized.request),
       });
       const target =
         authorized.request.resolvedPath ??
@@ -794,9 +801,9 @@ export function createPiAutoReviewExtension(
         "Break-glass authorized once for the exact request; retry within 60 seconds.",
         "warning",
       );
-      authorizationLedger.recordDecision({
+      authorizations.recordDecision({
         kind: "break_glass",
-        text: describeForLedger(authorized.request),
+        text: describeOperation(authorized.request),
       });
       const actionSummary = JSON.stringify({
         requestId: authorized.requestId,
@@ -818,7 +825,7 @@ export function createPiAutoReviewExtension(
   pi.on("input", (event, ctx) => {
     try {
       if (!shouldRecordInput(event)) return;
-      authorizationLedger.record({
+      authorizations.record({
         text: event.text,
         inReplyTo: lastAssistantText(ctx.sessionManager.buildContextEntries()),
       });
@@ -838,7 +845,7 @@ export function createPiAutoReviewExtension(
     broker?.clear();
     reviewResults.clear();
     telemetryCompleted.clear();
-    authorizationLedger.clear();
+    authorizations.open(ctx.sessionManager.getSessionId());
     reviewedRequests.clear();
     deferredToHuman.clear();
     recentApprovals.length = 0;
@@ -912,7 +919,7 @@ export function createPiAutoReviewExtension(
       // One final decision per request: the first one (human or automatic)
       // uses the id up, so a later event for the same id is ignored.
       reviewedRequests.delete(decision.requestId);
-      if (kind && described) authorizationLedger.recordDecision({ kind, text: described });
+      if (kind && described) authorizations.recordDecision({ kind, text: described });
     } catch {
       // Recording is best-effort; it must never affect the decision itself.
     }
@@ -979,7 +986,7 @@ export function createPiAutoReviewExtension(
           const reviewConfig = config;
           const request = boundaryRequest(context, details, query);
           reviewedRequests.delete(request.id);
-          reviewedRequests.set(request.id, describeForLedger(request));
+          reviewedRequests.set(request.id, describeOperation(request));
           while (reviewedRequests.size > MAX_REVIEWED_REQUESTS) {
             reviewedRequests.delete(reviewedRequests.keys().next().value!);
           }
@@ -996,7 +1003,7 @@ export function createPiAutoReviewExtension(
             issueGrant: false,
           });
           if (decision.kind === "defer") {
-            deferredToHuman.set(request.id, { cwd: request.cwd, text: describeForLedger(request) });
+            deferredToHuman.set(request.id, { cwd: request.cwd, text: describeOperation(request) });
             for (const oldest of deferredToHuman.keys()) {
               if (deferredToHuman.size <= 64) break;
               deferredToHuman.delete(oldest);
@@ -1164,11 +1171,11 @@ export function createPiAutoReviewExtension(
   };
 }
 
-// What a ledger decision entry says about the operation: the whole command
+// What a decision entry says about the operation: the whole command
 // (not just the gated unit), else the tool's arguments or the path. For
 // non-bash tools the arguments are agent-authored, but they are what the
 // human saw in the dialog when deciding.
-function describeForLedger(request: BoundaryRequest): string {
+function describeOperation(request: BoundaryRequest): string {
   const target =
     request.fullCommand ??
     request.command ??

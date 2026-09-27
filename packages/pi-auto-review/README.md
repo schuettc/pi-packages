@@ -213,13 +213,18 @@ reviewer, selected at startup with `reviewer` or in-session with
   retry, which is newer, still goes through. The hard floors deny first either
   way.
 - **Human authorization.** Jev honors what the human actually authorized:
-  - An **authorization ledger** records what the human types this session
+  - **Authorizations** record what the human types in this conversation
     (`interactive` input only; slash commands, `!` escapes, channel and muster
     deliveries, and this extension's own retry messages are excluded), each
-    with the assistant text it answered. So "yes, go ahead with the plan" from
-    a long planning session still counts after compaction or behind a stream
-    of channel notifications. It lives in memory only and is cleared on
-    `session_start`: a restart means authorizing again.
+    with the assistant text it answered, plus their permission decisions
+    (dialog Yes/No, `/auto-review-approve`, break-glass). So "yes, go ahead
+    with the plan" from a long planning session still counts after compaction
+    or behind a stream of channel notifications. They are saved per session
+    in `~/.pi/agent/extensions/pi-auto-review/authorizations/<session-id>.json`
+    (0600, in the protected directory), so a reload (`/reload`, `kempt
+    update`, pi-auto-reload) or a resume of the same conversation keeps them;
+    a new or forked session starts empty. Entries expire after 24 hours, and
+    a file that doesn't validate is ignored.
   - **Standing authorizations** in the trusted user config cover routine
     work, optionally scoped to a directory. Project config cannot set them.
     A rule only helps when the command shows it applies ("after CI is green"
