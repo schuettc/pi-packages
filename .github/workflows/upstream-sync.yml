@@ -21,8 +21,10 @@ jobs:
           pkg_dir: "packages/pi-auto-review"
           tag_prefix: "pi-auto-review-v"
           test_cmd: "npm ci && npm run check -w packages/pi-auto-review && npm test -w packages/pi-auto-review"
-          # Also test on the newest Node release: pi runs on the machine's Node.
-          test_node_versions: "current"
+          # Also test on the newest LTS. Not "current" yet: on Node 26 the tests can't
+# run, because Node dropped the TypeScript transform mode the test harness uses
+# for pi-permission-system's .ts sources (parameter properties). The runtime is fine.
+          test_node_versions: "lts"
           build_cmd: ""
           force: ${{ inputs.force }}
           dry_run: ${{ inputs.dry_run }}
